@@ -10,10 +10,15 @@ export interface Point {
   y: number;
 }
 
-export const subtract = (p1: Point, p2: Point): Point => ({ x: p1.x - p2.x, y: p1.y - p2.y });
+export const subtract = (p1: Point, p2: Point): Point => ({
+  x: p1.x - p2.x,
+  y: p1.y - p2.y,
+});
 export const magnitude = (p: Point): number => Math.hypot(p.x, p.y);
-export const distance = (p1: Point, p2: Point): number => magnitude(subtract(p1, p2));
-export const equals = (p1: Point, p2: Point): boolean => p1.x === p2.x && p1.y === p2.y;
+export const distance = (p1: Point, p2: Point): number =>
+  magnitude(subtract(p1, p2));
+export const equals = (p1: Point, p2: Point): boolean =>
+  p1.x === p2.x && p1.y === p2.y;
 
 export const average = (arr: number[]): number =>
   arr.reduce((acc, v) => acc + v, 0) / arr.length;
@@ -21,7 +26,8 @@ export const average = (arr: number[]): number =>
 /** Total arc length of a polyline. */
 export const curveLength = (points: Point[]): number => {
   let len = 0;
-  for (let i = 1; i < points.length; i++) len += distance(points[i], points[i - 1]);
+  for (let i = 1; i < points.length; i++)
+    len += distance(points[i], points[i - 1]);
   return len;
 };
 
@@ -51,14 +57,16 @@ export const pointToPolylineDist = (p: Point, polyline: Point[]): number => {
 };
 
 /** Average distance from each of `points` to the polyline `curve`. */
-export const averageDistanceToPolyline = (points: Point[], curve: Point[]): number =>
-  average(points.map((p) => pointToPolylineDist(p, curve)));
+export const averageDistanceToPolyline = (
+  points: Point[],
+  curve: Point[],
+): number => average(points.map(p => pointToPolylineDist(p, curve)));
 
 /** Point on the p1->p2 line, `dist` beyond p2. */
 const extendPointOnLine = (p1: Point, p2: Point, dist: number): Point => {
   const vect = subtract(p2, p1);
   const norm = dist / magnitude(vect);
-  return { x: p2.x + norm * vect.x, y: p2.y + norm * vect.y };
+  return {x: p2.x + norm * vect.x, y: p2.y + norm * vect.y};
 };
 
 /** Discrete Fréchet distance between two curves (rolling-column DP). */
@@ -73,7 +81,10 @@ export const frechetDist = (curve1: Point[], curve2: Point[]): number => {
       if (i === 0 && j === 0) curCol.push(d);
       else if (j === 0) curCol.push(Math.max(prevCol[0], d));
       else if (i === 0) curCol.push(Math.max(curCol[j - 1], d));
-      else curCol.push(Math.max(Math.min(prevCol[j], prevCol[j - 1], curCol[j - 1]), d));
+      else
+        curCol.push(
+          Math.max(Math.min(prevCol[j], prevCol[j - 1], curCol[j - 1]), d),
+        );
     }
     prevCol = curCol;
   }
@@ -113,7 +124,9 @@ export const outlineCurve = (curve: Point[], numPoints = 30): Point[] => {
         remainingDist -= nextDist;
         last = remaining.shift()!;
       } else {
-        outlined.push(extendPointOnLine(last, remaining[0], remainingDist - nextDist));
+        outlined.push(
+          extendPointOnLine(last, remaining[0], remainingDist - nextDist),
+        );
         break;
       }
     }
@@ -125,20 +138,24 @@ export const outlineCurve = (curve: Point[], numPoints = 30): Point[] => {
 /** Translate + scale a curve into a normalized frame (Procrustes-style). */
 export const normalizeCurve = (curve: Point[]): Point[] => {
   const outlined = outlineCurve(curve);
-  const mean = { x: average(outlined.map((p) => p.x)), y: average(outlined.map((p) => p.y)) };
-  const translated = outlined.map((p) => subtract(p, mean));
+  const mean = {
+    x: average(outlined.map(p => p.x)),
+    y: average(outlined.map(p => p.y)),
+  };
+  const translated = outlined.map(p => subtract(p, mean));
   const first = translated[0];
   const last = translated[translated.length - 1];
-  const scale = Math.sqrt(average([
-    first.x ** 2 + first.y ** 2,
-    last.x ** 2 + last.y ** 2,
-  ]));
-  return subdivideCurve(translated.map((p) => ({ x: p.x / scale, y: p.y / scale })));
+  const scale = Math.sqrt(
+    average([first.x ** 2 + first.y ** 2, last.x ** 2 + last.y ** 2]),
+  );
+  return subdivideCurve(
+    translated.map(p => ({x: p.x / scale, y: p.y / scale})),
+  );
 };
 
 /** Rotate a curve around the origin. */
 export const rotate = (curve: Point[], theta: number): Point[] =>
-  curve.map((p) => ({
+  curve.map(p => ({
     x: Math.cos(theta) * p.x - Math.sin(theta) * p.y,
     y: Math.sin(theta) * p.x + Math.cos(theta) * p.y,
   }));

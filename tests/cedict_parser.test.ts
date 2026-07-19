@@ -1,5 +1,4 @@
-import { CedictParser } from '../src/dictionary/cedict_parser';
-import { App } from 'obsidian';
+import {CedictParser} from '../src/dictionary/cedict_parser';
 
 describe('CedictParser & MaxMatch', () => {
   let parser: CedictParser;
@@ -19,7 +18,7 @@ describe('CedictParser & MaxMatch', () => {
   it('should parse dictionary lines correctly', () => {
     const searchResult = parser.simplifiedTrie.search('汉语');
     expect(searchResult).toBeDefined();
-    
+
     if (searchResult) {
       const entry = JSON.parse(searchResult[0]);
       expect(entry.pinyin).toBe('han4 yu3');

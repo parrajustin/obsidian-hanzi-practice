@@ -124,13 +124,29 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
 
 ---
 
-## Unit tests
+## Tests (`npm test` = type check → lint → unit)
 
-`npm test` / `npx jest` — 21 tests across `cedict_parser` / `history_manager` /
-`spaced_repetition` / `stroke_codec` (HZS1 round-trip incl. negative + astral-plane chars) /
-`stroke_matcher` (accepts median replay + jitter, rejects backwards/wrong/far strokes), using
-`tests/__mocks__/obsidian.ts` for the `obsidian` module. Any new `obsidian` API used in a
-jest-reachable file must be added to that mock.
+`npm test` chains three gates (same pattern as pi-controller's `display_control_web`):
+1. `test:ts` — `tsc --noEmit` over `src/`, `tests/`, `scripts/` (all in tsconfig `include`).
+2. `lint` — `eslint .` with the **gts** flat config (`eslint.config.js` spreads `require('gts')`:
+   eslint recommended + typescript-eslint recommended + prettier-as-a-rule, type-aware rules
+   like `no-floating-promises` keyed off `./tsconfig.json`). Prettier style comes from gts via
+   `.prettierrc.js` (single quotes, no bracket spacing, trailing commas, 80 cols). A
+   `tests/**` override relaxes `no-explicit-any` / empty-catch / unused-catch-param (the
+   puppeteer harnesses live on untyped `page.evaluate`); `src/` stays fully strict. Built
+   bundles (`main.js`, `tests/*_runner.js`, `tests/component_harness.js`) and config `.mjs`/
+   `jest.config.js` are ignored. `npm run lint:fix` / `npm run format` to auto-fix — but beware:
+   `eslint . --fix` on *unformatted* code once produced broken output from overlapping fixes;
+   run `npm run format` (plain prettier) first, then `lint:fix`.
+3. `test:unit` — `npx jest`: 21 tests across `cedict_parser` / `history_manager` /
+   `spaced_repetition` / `stroke_codec` (HZS1 round-trip incl. negative + astral-plane chars) /
+   `stroke_matcher` (accepts median replay + jitter, rejects backwards/wrong/far strokes), using
+   `tests/__mocks__/obsidian.ts` for the `obsidian` module. Any new `obsidian` API used in a
+   jest-reachable file must be added to that mock.
+
+Note: `typescript-eslint` is pinned to 8.62.1 via `pnpm-workspace.yaml` `overrides:` — gts's
+`^8.46.1` range otherwise resolves to 8.64.0, which is only partially published on npm (its
+`@typescript-eslint/utils` dep is missing) and breaks `pnpm install`.
 
 ---
 

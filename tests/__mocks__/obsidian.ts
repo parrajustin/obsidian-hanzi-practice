@@ -32,7 +32,7 @@ export class WorkspaceLeaf {
 
 export class ItemView {
   containerEl = document.createElement('div');
-  
+
   constructor(public leaf: any) {
     // Setup a dummy DOM structure for Obsidian view container
     const header = document.createElement('div');
@@ -44,7 +44,7 @@ export class ItemView {
   getViewType() {
     return 'dummy-view';
   }
-  
+
   getDisplayText() {
     return 'Dummy View';
   }
@@ -64,23 +64,38 @@ export class Plugin {
 
 export class PluginSettingTab {
   containerEl = document.createElement('div');
-  constructor(public app: App, public plugin: Plugin) {}
+  constructor(
+    public app: App,
+    public plugin: Plugin,
+  ) {}
   display() {}
 }
 
 export class Setting {
   constructor(public containerEl: HTMLElement) {}
-  setName() { return this; }
-  setDesc() { return this; }
-  addText() { return this; }
-  addButton() { return this; }
+  setName() {
+    return this;
+  }
+  setDesc() {
+    return this;
+  }
+  addText() {
+    return this;
+  }
+  addButton() {
+    return this;
+  }
 }
 
 export class Modal {
   contentEl = document.createElement('div');
   constructor(public app: App) {}
-  open() { this.onOpen(); }
-  close() { this.onClose(); }
+  open() {
+    this.onOpen();
+  }
+  close() {
+    this.onClose();
+  }
   onOpen() {}
   onClose() {}
 }

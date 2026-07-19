@@ -1,13 +1,22 @@
-import { App } from 'obsidian';
-import { FileUtil, FileSystemType } from 'standard-obsidian-lib/src/filesystem/file_util';
-import { SpacedRepetition, Review } from '../spaced_repetition';
-import { PracticeEntry, parsePracticeList } from './practice_list';
+import {App} from 'obsidian';
+import {
+  FileUtil,
+  FileSystemType,
+} from 'standard-obsidian-lib/src/filesystem/file_util';
+import {SpacedRepetition, Review} from '../spaced_repetition';
+import {PracticeEntry, parsePracticeList} from './practice_list';
 
 export class HistoryManager {
-
   /** Load and parse the practice list into structured entries. */
-  static async loadPracticeEntries(app: App, practiceFilePath: string): Promise<PracticeEntry[]> {
-    const practiceResult = await FileUtil.fetchFile(app, practiceFilePath, FileSystemType.OBSIDIAN);
+  static async loadPracticeEntries(
+    app: App,
+    practiceFilePath: string,
+  ): Promise<PracticeEntry[]> {
+    const practiceResult = await FileUtil.fetchFile(
+      app,
+      practiceFilePath,
+      FileSystemType.OBSIDIAN,
+    );
     if (!practiceResult.ok) {
       return [];
     }
@@ -16,20 +25,32 @@ export class HistoryManager {
   }
 
   /** Look up the cached entry (pinyin + english) for a single character. */
-  static async getPracticeEntry(app: App, practiceFilePath: string, character: string): Promise<PracticeEntry | null> {
+  static async getPracticeEntry(
+    app: App,
+    practiceFilePath: string,
+    character: string,
+  ): Promise<PracticeEntry | null> {
     const entries = await this.loadPracticeEntries(app, practiceFilePath);
     return entries.find(e => e.character === character) ?? null;
   }
 
-
-  static async appendResult(app: App, historyFilePath: string, character: string, score: number): Promise<void> {
+  static async appendResult(
+    app: App,
+    historyFilePath: string,
+    character: string,
+    score: number,
+  ): Promise<void> {
     const timestamp = Date.now();
     const line = `\n- [${timestamp}] ${character}: ${score}`;
-    
-    const fileResult = await FileUtil.fetchFile(app, historyFilePath, FileSystemType.OBSIDIAN);
-    let currentData = new Uint8Array(0);
+
+    const fileResult = await FileUtil.fetchFile(
+      app,
+      historyFilePath,
+      FileSystemType.OBSIDIAN,
+    );
+    let currentData: Uint8Array = new Uint8Array(0);
     if (fileResult.ok) {
-      currentData = fileResult.val as any;
+      currentData = fileResult.val;
     }
 
     const decoder = new TextDecoder('utf-8');
@@ -37,11 +58,23 @@ export class HistoryManager {
     const newText = text + line;
 
     const encoder = new TextEncoder();
-    await FileUtil.writeToFile(app, historyFilePath, encoder.encode(newText), FileSystemType.OBSIDIAN);
+    await FileUtil.writeToFile(
+      app,
+      historyFilePath,
+      encoder.encode(newText),
+      FileSystemType.OBSIDIAN,
+    );
   }
 
-  static async parseHistory(app: App, historyFilePath: string): Promise<Record<string, Review[]>> {
-    const fileResult = await FileUtil.fetchFile(app, historyFilePath, FileSystemType.OBSIDIAN);
+  static async parseHistory(
+    app: App,
+    historyFilePath: string,
+  ): Promise<Record<string, Review[]>> {
+    const fileResult = await FileUtil.fetchFile(
+      app,
+      historyFilePath,
+      FileSystemType.OBSIDIAN,
+    );
     if (!fileResult.ok) {
       return {};
     }
@@ -49,7 +82,7 @@ export class HistoryManager {
     const decoder = new TextDecoder('utf-8');
     const text = decoder.decode(fileResult.val);
     const lines = text.split('\n');
-    
+
     const history: Record<string, Review[]> = {};
 
     const regex = /- \[(\d+)\] (.*?): (\d+)/;
@@ -63,17 +96,23 @@ export class HistoryManager {
         if (!history[character]) {
           history[character] = [];
         }
-        history[character].push({ timestamp, difficulty: score });
+        history[character].push({timestamp, difficulty: score});
       }
     }
 
     return history;
   }
 
-  static async getNextDueCharacter(app: App, historyFilePath: string, practiceFilePath: string): Promise<string | null> {
+  static async getNextDueCharacter(
+    app: App,
+    historyFilePath: string,
+    practiceFilePath: string,
+  ): Promise<string | null> {
     const entries = await this.loadPracticeEntries(app, practiceFilePath);
     // Single hanzi only (matches how the app models practice items).
-    const characters = entries.map(e => e.character).filter(c => c.length === 1);
+    const characters = entries
+      .map(e => e.character)
+      .filter(c => c.length === 1);
 
     if (characters.length === 0) return null;
 
@@ -87,7 +126,7 @@ export class HistoryManager {
     for (const char of characters) {
       const reviews = history[char] || [];
       const dueDay = SpacedRepetition.calculateDueDayNumber(reviews);
-      
+
       if (dueDay <= today) {
         const overdue = today - dueDay;
         if (overdue > maxOverdue) {

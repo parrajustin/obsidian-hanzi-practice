@@ -1,9 +1,12 @@
-import { App } from 'obsidian';
+import {App} from 'obsidian';
 import * as zlib from 'zlib';
-import { FileUtil, FileSystemType } from 'standard-obsidian-lib/src/filesystem/file_util';
-import { Trie } from './trie';
-import { Ok, Err, Result } from 'standard-ts-lib/src/result';
-import { StatusError, ErrorCode } from 'standard-ts-lib/src/status_error';
+import {
+  FileUtil,
+  FileSystemType,
+} from 'standard-obsidian-lib/src/filesystem/file_util';
+import {Trie} from './trie';
+import {Ok, Err, Result} from 'standard-ts-lib/src/result';
+import {StatusError, ErrorCode} from 'standard-ts-lib/src/status_error';
 
 export interface CedictEntry {
   traditional: string;
@@ -16,15 +19,27 @@ export class CedictParser {
   simplifiedTrie = new Trie();
   traditionalTrie = new Trie();
 
-  async loadDictionary(app: App, dictPath: string): Promise<Result<boolean, StatusError>> {
+  async loadDictionary(
+    app: App,
+    dictPath: string,
+  ): Promise<Result<boolean, StatusError>> {
     // Determine if it's raw or obsidian vault path. For now, assume obsidian vault path
     // Wait, the prompt says the file is in: /home/jrparra/git/obsidian-hanzi-practice/cedict_1_0_...
     // If it's in the plugin root, we can fetch it via adapter (RAW).
-    
+
     try {
-      const fileResult = await FileUtil.fetchFile(app, dictPath, FileSystemType.RAW);
+      const fileResult = await FileUtil.fetchFile(
+        app,
+        dictPath,
+        FileSystemType.RAW,
+      );
       if (!fileResult.ok) {
-        return Err(new StatusError(ErrorCode.INTERNAL, `Failed to load dict: ${fileResult.val.message}`));
+        return Err(
+          new StatusError(
+            ErrorCode.INTERNAL,
+            `Failed to load dict: ${fileResult.val.message}`,
+          ),
+        );
       }
 
       // The dictionary ships gzipped (`.txt.gz`) to keep the plugin download
@@ -40,8 +55,13 @@ export class CedictParser {
 
       this.parse(text);
       return Ok(true);
-    } catch (e: any) {
-      return Err(new StatusError(ErrorCode.INTERNAL, `Error loading dict: ${e.message}`));
+    } catch (e) {
+      return Err(
+        new StatusError(
+          ErrorCode.INTERNAL,
+          `Error loading dict: ${e instanceof Error ? e.message : String(e)}`,
+        ),
+      );
     }
   }
 
@@ -59,8 +79,13 @@ export class CedictParser {
         const pinyin = match[3];
         const english = match[4];
 
-        const jsonStr = JSON.stringify({ traditional, simplified, pinyin, english });
-        
+        const jsonStr = JSON.stringify({
+          traditional,
+          simplified,
+          pinyin,
+          english,
+        });
+
         this.simplifiedTrie.insert(simplified, jsonStr);
         this.traditionalTrie.insert(traditional, jsonStr);
       }
@@ -75,8 +100,6 @@ export class CedictParser {
     let i = 0;
 
     while (i < text.length) {
-      let longestMatch = '';
-      
       // Try to match the longest possible string starting at i
       // We check substrings from i up to text.length
       let current = this.simplifiedTrie.root;

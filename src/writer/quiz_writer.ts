@@ -6,13 +6,13 @@
  * "Give Up". Everything renders from the medians-only stroke database — no
  * glyph outlines, no network.
  */
-import { Point } from './geometry';
-import { strokeMatches } from './stroke_matcher';
-import { CharMedians } from '../data/stroke_codec';
+import {Point} from './geometry';
+import {strokeMatches} from './stroke_matcher';
+import {CharMedians} from '../data/stroke_codec';
 
 // All makemeahanzi/hanzi-writer characters share this bounding box (y-up).
-const BOUNDS_FROM = { x: 0, y: -124 };
-const BOUNDS_TO = { x: 1024, y: 900 };
+const BOUNDS_FROM = {x: 0, y: -124};
+const BOUNDS_TO = {x: 1024, y: 900};
 
 // Rendered brush width, in data-space units (scaled to pixels at draw time).
 const BRUSH_WIDTH = 50;
@@ -28,9 +28,16 @@ export interface QuizWriterOptions {
 }
 
 export interface QuizCallbacks {
-  onMistake?: (data: { strokeNum: number; mistakesOnStroke: number; totalMistakes: number }) => void;
-  onCorrectStroke?: (data: { strokeNum: number; strokesRemaining: number }) => void;
-  onComplete?: (summary: { character: string; totalMistakes: number }) => void;
+  onMistake?: (data: {
+    strokeNum: number;
+    mistakesOnStroke: number;
+    totalMistakes: number;
+  }) => void;
+  onCorrectStroke?: (data: {
+    strokeNum: number;
+    strokesRemaining: number;
+  }) => void;
+  onComplete?: (summary: {character: string; totalMistakes: number}) => void;
 }
 
 export class HanziQuizWriter {
@@ -63,20 +70,22 @@ export class HanziQuizWriter {
     container: HTMLElement,
     character: string,
     medians: CharMedians,
-    options: QuizWriterOptions
+    options: QuizWriterOptions,
   ) {
     this.character = character;
-    this.medians = medians.map((stroke) => stroke.map(([x, y]) => ({ x, y })));
-    this.opts = { hintAfterMisses: 3, ...options };
+    this.medians = medians.map(stroke => stroke.map(([x, y]) => ({x, y})));
+    this.opts = {hintAfterMisses: 3, ...options};
 
-    const { width, height, padding } = this.opts;
+    const {width, height, padding} = this.opts;
     const effW = width - 2 * padding;
     const effH = height - 2 * padding;
     const preW = BOUNDS_TO.x - BOUNDS_FROM.x;
     const preH = BOUNDS_TO.y - BOUNDS_FROM.y;
     this.scale = Math.min(effW / preW, effH / preH);
-    this.xOffset = -BOUNDS_FROM.x * this.scale + padding + (effW - this.scale * preW) / 2;
-    this.yOffset = -BOUNDS_FROM.y * this.scale + padding + (effH - this.scale * preH) / 2;
+    this.xOffset =
+      -BOUNDS_FROM.x * this.scale + padding + (effW - this.scale * preW) / 2;
+    this.yOffset =
+      -BOUNDS_FROM.y * this.scale + padding + (effH - this.scale * preH) / 2;
 
     this.svg = document.createElementNS(SVG_NS, 'svg');
     this.svg.setAttribute('width', String(width));
@@ -119,7 +128,9 @@ export class HanziQuizWriter {
   showOutline() {
     this.outlineGroup.replaceChildren();
     for (const median of this.medians) {
-      this.outlineGroup.appendChild(this.makeStrokePath(median, '#DDD', 'hanzi-stroke-outline'));
+      this.outlineGroup.appendChild(
+        this.makeStrokePath(median, '#DDD', 'hanzi-stroke-outline'),
+      );
     }
   }
 
@@ -129,7 +140,11 @@ export class HanziQuizWriter {
     this.completedGroup.replaceChildren();
     this.medians.forEach((median, i) => {
       const timer = window.setTimeout(() => {
-        const pathEl = this.makeStrokePath(median, '#555', 'hanzi-stroke-animated');
+        const pathEl = this.makeStrokePath(
+          median,
+          '#555',
+          'hanzi-stroke-animated',
+        );
         const len = pathEl.getTotalLength();
         pathEl.style.strokeDasharray = `${len} ${len}`;
         pathEl.style.strokeDashoffset = String(len);
@@ -145,7 +160,7 @@ export class HanziQuizWriter {
 
   /** Display-space (svg-local px) points of a stroke's median. Used by tests. */
   getStrokeDisplayPoints(strokeNum: number): Point[] {
-    return this.medians[strokeNum].map((p) => this.dataToScreen(p));
+    return this.medians[strokeNum].map(p => this.dataToScreen(p));
   }
 
   destroy() {
@@ -178,14 +193,24 @@ export class HanziQuizWriter {
 
   private pathString(points: Point[]): string {
     return points
-      .map((p, i) => `${i === 0 ? 'M' : 'L'} ${Math.round(p.x * 10) / 10} ${Math.round(p.y * 10) / 10}`)
+      .map(
+        (p, i) =>
+          `${i === 0 ? 'M' : 'L'} ${Math.round(p.x * 10) / 10} ${Math.round(p.y * 10) / 10}`,
+      )
       .join(' ');
   }
 
   /** Round-capped polyline along a median, i.e. a brush-skeleton stroke. */
-  private makeStrokePath(median: Point[], color: string, cls: string): SVGPathElement {
+  private makeStrokePath(
+    median: Point[],
+    color: string,
+    cls: string,
+  ): SVGPathElement {
     const pathEl = document.createElementNS(SVG_NS, 'path');
-    pathEl.setAttribute('d', this.pathString(median.map((p) => this.dataToScreen(p))));
+    pathEl.setAttribute(
+      'd',
+      this.pathString(median.map(p => this.dataToScreen(p))),
+    );
     pathEl.setAttribute('fill', 'none');
     pathEl.setAttribute('stroke', color);
     pathEl.setAttribute('stroke-width', String(BRUSH_WIDTH * this.scale));
@@ -197,14 +222,18 @@ export class HanziQuizWriter {
 
   private svgLocalPoint(evt: PointerEvent): Point {
     const rect = this.svg.getBoundingClientRect();
-    return { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+    return {x: evt.clientX - rect.left, y: evt.clientY - rect.top};
   }
 
   private onPointerDown = (evt: PointerEvent) => {
     if (!this.quizActive || this.isComplete) return;
     evt.preventDefault();
     // Synthetic events (tests) may carry a pointerId with no active pointer.
-    try { this.svg.setPointerCapture(evt.pointerId); } catch (e) { /* ignore */ }
+    try {
+      this.svg.setPointerCapture(evt.pointerId);
+    } catch {
+      /* ignore */
+    }
     this.drawing = true;
     this.currentInkPoints = [this.svgLocalPoint(evt)];
     this.currentInkPath = document.createElementNS(SVG_NS, 'path');
@@ -235,7 +264,10 @@ export class HanziQuizWriter {
 
   private updateInkPath() {
     if (this.currentInkPath) {
-      this.currentInkPath.setAttribute('d', this.pathString(this.currentInkPoints));
+      this.currentInkPath.setAttribute(
+        'd',
+        this.pathString(this.currentInkPoints),
+      );
     }
   }
 
@@ -246,15 +278,23 @@ export class HanziQuizWriter {
     this.currentInkPoints = [];
     if (this.isComplete) return;
 
-    const dataPoints = inkPoints.map((p) => this.screenToData(p));
+    const dataPoints = inkPoints.map(p => this.screenToData(p));
     const strokeNum = this.currentStrokeIndex;
-    const matched = strokeMatches(dataPoints, this.medians[strokeNum], strokeNum);
+    const matched = strokeMatches(
+      dataPoints,
+      this.medians[strokeNum],
+      strokeNum,
+    );
 
     if (matched) {
       this.hintGroup.replaceChildren();
       this.mistakesOnCurrentStroke = 0;
       this.completedGroup.appendChild(
-        this.makeStrokePath(this.medians[strokeNum], '#555', 'hanzi-stroke-done')
+        this.makeStrokePath(
+          this.medians[strokeNum],
+          '#555',
+          'hanzi-stroke-done',
+        ),
       );
       this.currentStrokeIndex++;
       this.callbacks.onCorrectStroke?.({
@@ -278,9 +318,16 @@ export class HanziQuizWriter {
       });
       // The user keeps missing this stroke: highlight the expected stroke as
       // a hint. It stays visible until the stroke is drawn correctly.
-      if (this.mistakesOnCurrentStroke >= this.opts.hintAfterMisses && this.hintGroup.childElementCount === 0) {
+      if (
+        this.mistakesOnCurrentStroke >= this.opts.hintAfterMisses &&
+        this.hintGroup.childElementCount === 0
+      ) {
         this.hintGroup.appendChild(
-          this.makeStrokePath(this.medians[strokeNum], '#FF9800', 'hanzi-stroke-hint')
+          this.makeStrokePath(
+            this.medians[strokeNum],
+            '#FF9800',
+            'hanzi-stroke-hint',
+          ),
         );
       }
     }

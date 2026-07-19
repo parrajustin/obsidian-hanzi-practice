@@ -27,7 +27,13 @@ const START_AND_END_DIST_THRESHOLD = 250; // bigger = more lenient
 const FRECHET_THRESHOLD = 0.4; // bigger = more lenient
 const MIN_LEN_THRESHOLD = 0.35; // smaller = more lenient
 const COSINE_SIMILARITY_THRESHOLD = 0; // -1 to 1, smaller = more lenient
-const SHAPE_FIT_ROTATIONS = [Math.PI / 16, Math.PI / 32, 0, -Math.PI / 32, -Math.PI / 16];
+const SHAPE_FIT_ROTATIONS = [
+  Math.PI / 16,
+  Math.PI / 32,
+  0,
+  -Math.PI / 32,
+  -Math.PI / 16,
+];
 
 const stripDuplicates = (points: Point[]): Point[] => {
   const out: Point[] = [];
@@ -39,15 +45,16 @@ const stripDuplicates = (points: Point[]): Point[] => {
 
 const getEdgeVectors = (points: Point[]): Point[] => {
   const vectors: Point[] = [];
-  for (let i = 1; i < points.length; i++) vectors.push(subtract(points[i], points[i - 1]));
+  for (let i = 1; i < points.length; i++)
+    vectors.push(subtract(points[i], points[i - 1]));
   return vectors;
 };
 
 const directionMatches = (points: Point[], median: Point[]): boolean => {
   const edgeVectors = getEdgeVectors(points);
   const medianVectors = getEdgeVectors(median);
-  const similarities = edgeVectors.map((edge) =>
-    Math.max(...medianVectors.map((mv) => cosineSimilarity(mv, edge)))
+  const similarities = edgeVectors.map(edge =>
+    Math.max(...medianVectors.map(mv => cosineSimilarity(mv, edge))),
   );
   return average(similarities) > COSINE_SIMILARITY_THRESHOLD;
 };
@@ -68,7 +75,11 @@ const shapeFit = (curve1: Point[], curve2: Point[]): boolean => {
  * @param strokeNum  index of the expected stroke (later strokes are graded
  *                   with a tighter distance threshold, matching hanzi-writer)
  */
-export function strokeMatches(userPoints: Point[], median: Point[], strokeNum: number): boolean {
+export function strokeMatches(
+  userPoints: Point[],
+  median: Point[],
+  strokeNum: number,
+): boolean {
   const points = stripDuplicates(userPoints);
   if (points.length < 2) return false;
 
@@ -78,12 +89,15 @@ export function strokeMatches(userPoints: Point[], median: Point[], strokeNum: n
 
   const startAndEndMatch =
     distance(median[0], points[0]) <= START_AND_END_DIST_THRESHOLD &&
-    distance(median[median.length - 1], points[points.length - 1]) <= START_AND_END_DIST_THRESHOLD;
+    distance(median[median.length - 1], points[points.length - 1]) <=
+      START_AND_END_DIST_THRESHOLD;
   if (!startAndEndMatch) return false;
 
   if (!directionMatches(points, median)) return false;
   if (!shapeFit(points, median)) return false;
 
-  const lengthMatches = (curveLength(points) + 25) / (curveLength(median) + 25) >= MIN_LEN_THRESHOLD;
+  const lengthMatches =
+    (curveLength(points) + 25) / (curveLength(median) + 25) >=
+    MIN_LEN_THRESHOLD;
   return lengthMatches;
 }

@@ -20,13 +20,15 @@
  * points per median stay small after simplification).
  */
 
-export type Point = { x: number; y: number };
+export type Point = {x: number; y: number};
 /** One character's medians: strokes -> points -> [x, y]. */
 export type CharMedians = number[][][];
 
 const MAGIC = [0x48, 0x5a, 0x53, 0x31]; // "HZS1"
 
-export function encodeStrokeData(entries: Map<string, CharMedians>): Uint8Array {
+export function encodeStrokeData(
+  entries: Map<string, CharMedians>,
+): Uint8Array {
   // First pass: size.
   let size = 4 + 4;
   for (const medians of entries.values()) {
@@ -37,19 +39,25 @@ export function encodeStrokeData(entries: Map<string, CharMedians>): Uint8Array 
   const view = new DataView(buf.buffer);
   let o = 0;
   for (const b of MAGIC) buf[o++] = b;
-  view.setUint32(o, entries.size, true); o += 4;
+  view.setUint32(o, entries.size, true);
+  o += 4;
   for (const [char, medians] of entries) {
     const cp = char.codePointAt(0);
-    if (cp === undefined) throw new Error(`empty character key`);
-    if (medians.length > 255) throw new Error(`${char}: too many strokes (${medians.length})`);
-    view.setUint32(o, cp, true); o += 4;
+    if (cp === undefined) throw new Error('empty character key');
+    if (medians.length > 255)
+      throw new Error(`${char}: too many strokes (${medians.length})`);
+    view.setUint32(o, cp, true);
+    o += 4;
     buf[o++] = medians.length;
     for (const stroke of medians) {
-      if (stroke.length > 255) throw new Error(`${char}: too many points (${stroke.length})`);
+      if (stroke.length > 255)
+        throw new Error(`${char}: too many points (${stroke.length})`);
       buf[o++] = stroke.length;
       for (const [x, y] of stroke) {
-        view.setInt16(o, x, true); o += 2;
-        view.setInt16(o, y, true); o += 2;
+        view.setInt16(o, x, true);
+        o += 2;
+        view.setInt16(o, y, true);
+        o += 2;
       }
     }
   }
@@ -71,7 +79,8 @@ export class StrokeDataReader {
     this.bytes = bytes;
     this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     for (let i = 0; i < MAGIC.length; i++) {
-      if (bytes[i] !== MAGIC[i]) throw new Error('stroke data: bad magic (not an HZS1 blob)');
+      if (bytes[i] !== MAGIC[i])
+        throw new Error('stroke data: bad magic (not an HZS1 blob)');
     }
     const count = this.view.getUint32(4, true);
     let o = 8;
@@ -108,8 +117,10 @@ export class StrokeDataReader {
       const pointCount = this.bytes[o++];
       const stroke: number[][] = [];
       for (let p = 0; p < pointCount; p++) {
-        const x = this.view.getInt16(o, true); o += 2;
-        const y = this.view.getInt16(o, true); o += 2;
+        const x = this.view.getInt16(o, true);
+        o += 2;
+        const y = this.view.getInt16(o, true);
+        o += 2;
         stroke.push([x, y]);
       }
       medians.push(stroke);

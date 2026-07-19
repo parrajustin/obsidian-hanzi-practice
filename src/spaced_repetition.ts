@@ -44,8 +44,11 @@ export class SpacedRepetition {
     }
 
     let efactor = 2.5;
-    reviews.forEach((review) => {
-      efactor += +(0.1 - (5 - review.difficulty) * (0.08 + (5 - review.difficulty) * 0.02));
+    reviews.forEach(review => {
+      efactor += +(
+        0.1 -
+        (5 - review.difficulty) * (0.08 + (5 - review.difficulty) * 0.02)
+      );
     });
 
     if (efactor < 1.3) {

@@ -14,7 +14,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
-import { encodeStrokeData, CharMedians } from '../src/data/stroke_codec';
+import {encodeStrokeData, CharMedians} from '../src/data/stroke_codec';
 
 const SIMPLIFY_EPSILON = 10;
 
@@ -37,7 +37,10 @@ function douglasPeucker(points: number[][], epsilon: number): number[][] {
   const last = points[points.length - 1];
   for (let i = 1; i < points.length - 1; i++) {
     const d = perpDist(points[i], first, last);
-    if (d > maxDist) { maxDist = d; maxIdx = i; }
+    if (d > maxDist) {
+      maxDist = d;
+      maxIdx = i;
+    }
   }
   if (maxDist <= epsilon) return [first, last];
   const left = douglasPeucker(points.slice(0, maxIdx + 1), epsilon);
@@ -48,7 +51,9 @@ function douglasPeucker(points: number[][], epsilon: number): number[][] {
 function main() {
   const [dataDir, outPath] = process.argv.slice(2);
   if (!dataDir || !outPath) {
-    console.error('usage: gen_stroke_data <hanzi-writer-data-dir> <out.bin.gz>');
+    console.error(
+      'usage: gen_stroke_data <hanzi-writer-data-dir> <out.bin.gz>',
+    );
     process.exit(1);
   }
   const entries = new Map<string, CharMedians>();
@@ -63,20 +68,21 @@ function main() {
     if (!Array.isArray(json.medians)) continue;
     const medians: CharMedians = json.medians.map((stroke: number[][]) => {
       rawPoints += stroke.length;
-      const simplified = douglasPeucker(stroke, SIMPLIFY_EPSILON)
-        .map(([x, y]) => [Math.round(x), Math.round(y)]);
+      const simplified = douglasPeucker(stroke, SIMPLIFY_EPSILON).map(
+        ([x, y]) => [Math.round(x), Math.round(y)],
+      );
       keptPoints += simplified.length;
       return simplified;
     });
     entries.set(char, medians);
   }
   const encoded = encodeStrokeData(entries);
-  const gz = zlib.gzipSync(encoded, { level: zlib.constants.Z_BEST_COMPRESSION });
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  const gz = zlib.gzipSync(encoded, {level: zlib.constants.Z_BEST_COMPRESSION});
+  fs.mkdirSync(path.dirname(outPath), {recursive: true});
   fs.writeFileSync(outPath, gz);
   console.log(
     `stroke data: ${entries.size} chars, ${rawPoints} -> ${keptPoints} median points, ` +
-    `${(encoded.length / 1e6).toFixed(2)}MB binary -> ${(gz.length / 1e6).toFixed(2)}MB gz`
+      `${(encoded.length / 1e6).toFixed(2)}MB binary -> ${(gz.length / 1e6).toFixed(2)}MB gz`,
   );
 }
 

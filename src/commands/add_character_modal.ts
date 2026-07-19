@@ -1,7 +1,7 @@
-import { App, Modal, Notice, Setting } from 'obsidian';
+import {App, Modal, Notice, Setting, TFile} from 'obsidian';
 import HanziPracticePlugin from '../main';
-import { HanziPluginSettings } from '../settings';
-import { formatPracticeEntry, parsePracticeList } from '../utils/practice_list';
+import {HanziPluginSettings} from '../settings';
+import {formatPracticeEntry, parsePracticeList} from '../utils/practice_list';
 
 export class AddCharacterModal extends Modal {
   private character = '';
@@ -16,36 +16,34 @@ export class AddCharacterModal extends Modal {
   }
 
   onOpen() {
-    const { contentEl } = this;
+    const {contentEl} = this;
     contentEl.empty();
-    contentEl.createEl('h2', { text: 'Add New Hanzi Character' });
+    contentEl.createEl('h2', {text: 'Add New Hanzi Character'});
 
     new Setting(contentEl)
       .setName('Character')
       .setDesc('Enter a single Chinese character to practice')
-      .addText((text) =>
-        text
-          .setPlaceholder('e.g. 汉')
-          .onChange((value) => {
-            this.character = value;
-            this.clearError();
-          })
+      .addText(text =>
+        text.setPlaceholder('e.g. 汉').onChange(value => {
+          this.character = value;
+          this.clearError();
+        }),
       );
 
     // Inline error message (hidden until a validation error occurs)
-    this.errorEl = contentEl.createEl('p', { cls: 'hanzi-add-error' });
+    this.errorEl = contentEl.createEl('p', {cls: 'hanzi-add-error'});
     this.errorEl.style.color = 'var(--text-error)';
     this.errorEl.style.display = 'none';
 
-    new Setting(contentEl).addButton((btn) =>
+    new Setting(contentEl).addButton(btn =>
       btn
         .setButtonText('Add')
         .setCta()
         .onClick(() => {
           if (this.character.trim().length > 0) {
-            this.addCharacter(this.character.trim());
+            void this.addCharacter(this.character.trim());
           }
-        })
+        }),
     );
   }
 
@@ -65,13 +63,13 @@ export class AddCharacterModal extends Modal {
     const file = this.app.vault.getAbstractFileByPath(filePath);
 
     let text = '';
-    if (file && file.hasOwnProperty('extension')) { // is TFile
-      text = await this.app.vault.read(file as any);
+    if (file instanceof TFile) {
+      text = await this.app.vault.read(file);
     }
 
     // Check if character already exists (compare the character field only).
     const existing = parsePracticeList(text);
-    if (existing.some((e) => e.character === char)) {
+    if (existing.some(e => e.character === char)) {
       this.showError(`"${char}" is already in your practice list.`);
       return; // keep the modal open so the user can correct the input
     }
@@ -88,7 +86,9 @@ export class AddCharacterModal extends Modal {
           const parsed = JSON.parse(defs[0]);
           pinyin = (parsed.pinyin as string) ?? '';
           english = (parsed.english as string) ?? '';
-        } catch (e) { /* leave empty */ }
+        } catch {
+          /* leave empty */
+        }
       }
       if (!pinyin) {
         new Notice(`Added "${char}", but it was not found in the dictionary.`);
@@ -97,11 +97,14 @@ export class AddCharacterModal extends Modal {
       new Notice(`Added "${char}", but the dictionary could not be loaded.`);
     }
 
-    const newLine = formatPracticeEntry({ character: char, pinyin, english });
-    const newText = text.trim().length > 0 ? `${text.replace(/\n$/, '')}\n${newLine}` : newLine;
+    const newLine = formatPracticeEntry({character: char, pinyin, english});
+    const newText =
+      text.trim().length > 0
+        ? `${text.replace(/\n$/, '')}\n${newLine}`
+        : newLine;
 
-    if (file && file.hasOwnProperty('extension')) {
-      await this.app.vault.modify(file as any, newText);
+    if (file instanceof TFile) {
+      await this.app.vault.modify(file, newText);
     } else {
       await this.app.vault.create(filePath, newText);
     }
@@ -110,7 +113,7 @@ export class AddCharacterModal extends Modal {
   }
 
   onClose() {
-    const { contentEl } = this;
+    const {contentEl} = this;
     contentEl.empty();
   }
 }

@@ -1,3 +1,9 @@
 allowBuilds:
   '@swc/core': false
   esbuild: true
+# typescript-eslint 8.64.0 is only partially published (its @typescript-eslint/utils
+# dep is missing from the registry), so pin the whole family to a complete release.
+overrides:
+  typescript-eslint: 8.62.1
+  '@typescript-eslint/eslint-plugin': 8.62.1
+  '@typescript-eslint/parser': 8.62.1

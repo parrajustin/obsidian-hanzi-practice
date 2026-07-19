@@ -8,8 +8,8 @@
  * `window.componentHarness` — synthetic pointer events at fixed coordinates,
  * so every rendered state is pixel-reproducible.
  */
-import { HanziQuizWriter } from '../src/writer/quiz_writer';
-import { StrokeDataReader } from '../src/data/stroke_codec';
+import {HanziQuizWriter} from '../src/writer/quiz_writer';
+import {StrokeDataReader} from '../src/data/stroke_codec';
 
 interface HarnessEvent {
   type: 'mistake' | 'correct' | 'complete';
@@ -65,28 +65,34 @@ const harness = {
     const reader = new StrokeDataReader(decodeBase64(strokeDataB64));
     const medians = reader.get(char);
     if (!medians) throw new Error(`harness: no stroke data for ${char}`);
-    writer = new HanziQuizWriter(box, char, medians, { width: 300, height: 300, padding: 5 });
+    writer = new HanziQuizWriter(box, char, medians, {
+      width: 300,
+      height: 300,
+      padding: 5,
+    });
     events = [];
     writer.quiz({
-      onMistake: (d) => events.push({ type: 'mistake', detail: d }),
-      onCorrectStroke: (d) => events.push({ type: 'correct', detail: d }),
-      onComplete: (s) => events.push({ type: 'complete', detail: s }),
+      onMistake: d => events.push({type: 'mistake', detail: d}),
+      onCorrectStroke: d => events.push({type: 'correct', detail: d}),
+      onComplete: s => events.push({type: 'complete', detail: s}),
     });
     (window as any).writer = writer;
-    return { strokeCount: writer.strokeCount, dbChars: reader.size };
+    return {strokeCount: writer.strokeCount, dbChars: reader.size};
   },
 
   /** Dispatch a synthetic pointer stroke along svg-local points. */
-  draw(points: Array<{ x: number; y: number }>, opts: { holdLast?: boolean } = {}) {
+  draw(points: Array<{x: number; y: number}>, opts: {holdLast?: boolean} = {}) {
     const svg = svgEl();
     const rect = svg.getBoundingClientRect();
-    const ev = (type: string, p: { x: number; y: number }) =>
-      svg.dispatchEvent(new PointerEvent(type, {
-        clientX: rect.left + p.x,
-        clientY: rect.top + p.y,
-        pointerId: 1,
-        bubbles: true,
-      }));
+    const ev = (type: string, p: {x: number; y: number}) =>
+      svg.dispatchEvent(
+        new PointerEvent(type, {
+          clientX: rect.left + p.x,
+          clientY: rect.top + p.y,
+          pointerId: 1,
+          bubbles: true,
+        }),
+      );
     ev('pointerdown', points[0]);
     for (const p of points.slice(1)) ev('pointermove', p);
     // holdLast leaves the pointer down so the in-progress ink stays rendered.
@@ -94,20 +100,26 @@ const harness = {
   },
 
   /** Finish a stroke started with holdLast. */
-  release(p: { x: number; y: number }) {
+  release(p: {x: number; y: number}) {
     const svg = svgEl();
     const rect = svg.getBoundingClientRect();
-    svg.dispatchEvent(new PointerEvent('pointerup', {
-      clientX: rect.left + p.x,
-      clientY: rect.top + p.y,
-      pointerId: 1,
-      bubbles: true,
-    }));
+    svg.dispatchEvent(
+      new PointerEvent('pointerup', {
+        clientX: rect.left + p.x,
+        clientY: rect.top + p.y,
+        pointerId: 1,
+        bubbles: true,
+      }),
+    );
   },
 
   /** A deliberately-wrong stroke: short scribble in the top-right corner. */
   drawWrong() {
-    harness.draw([{ x: 265, y: 30 }, { x: 275, y: 39 }, { x: 285, y: 48 }]);
+    harness.draw([
+      {x: 265, y: 30},
+      {x: 275, y: 39},
+      {x: 285, y: 48},
+    ]);
   },
 
   /** Replay stroke `i`'s median in screen space — always grades correct. */
@@ -118,7 +130,8 @@ const harness = {
   /** Disable stroke-animation transitions so animation frames are discrete. */
   disableTransitions() {
     const style = document.createElement('style');
-    style.textContent = '.hanzi-stroke-animated { transition: none !important; }';
+    style.textContent =
+      '.hanzi-stroke-animated { transition: none !important; }';
     document.head.appendChild(style);
   },
 
@@ -133,7 +146,8 @@ const harness = {
       isComplete: writer!.isComplete,
       hintShown: !!document.querySelector('.hanzi-stroke-hint'),
       doneStrokes: document.querySelectorAll('.hanzi-stroke-done').length,
-      animatedStrokes: document.querySelectorAll('.hanzi-stroke-animated').length,
+      animatedStrokes: document.querySelectorAll('.hanzi-stroke-animated')
+        .length,
       outlineStrokes: document.querySelectorAll('.hanzi-stroke-outline').length,
       inkVisible: !!document.querySelector('.hanzi-user-stroke'),
       events,
@@ -143,7 +157,7 @@ const harness = {
   /** Stage rect (viewport CSS px) for clipping screenshots. */
   rect() {
     const r = stage!.getBoundingClientRect();
-    return { x: r.left, y: r.top, width: r.width, height: r.height };
+    return {x: r.left, y: r.top, width: r.width, height: r.height};
   },
 };
 

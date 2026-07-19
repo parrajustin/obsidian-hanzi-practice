@@ -1,7 +1,11 @@
 export class QuizState {
-  static calculateFinalScore(percentMistakes: number, totalMistakes: number, pinyinMistakes: number): number {
+  static calculateFinalScore(
+    percentMistakes: number,
+    totalMistakes: number,
+    pinyinMistakes: number,
+  ): number {
     let baseScore = 0;
-    
+
     if (percentMistakes < 1e-6) {
       baseScore = 5;
     } else if (totalMistakes === 1) {

@@ -32,7 +32,7 @@ export function parsePracticeList(text: string): PracticeEntry[] {
     entries.push({
       character,
       pinyin: (parts[1] ?? '').trim(),
-      english: (parts[2] ?? '').trim()
+      english: (parts[2] ?? '').trim(),
     });
   }
   return entries;

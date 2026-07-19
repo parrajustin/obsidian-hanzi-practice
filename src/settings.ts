@@ -1,7 +1,6 @@
-import { App, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import { SchemaManager } from 'standard-obsidian-lib/src/schema/schema';
-import { z } from 'zod';
-import { Ok } from 'standard-ts-lib/src/result';
+import {App, Plugin, PluginSettingTab, Setting} from 'obsidian';
+import {SchemaManager} from 'standard-obsidian-lib/src/schema/schema';
+import {z} from 'zod';
 
 const v0Schema = z.object({
   version: z.literal(0),
@@ -19,7 +18,7 @@ export const SETTINGS_SCHEMA = new SchemaManager<[HanziPluginSettings], 0>(
     version: 0,
     historyFilePath: 'hanzi-practice-history.md',
     practiceFilePath: 'hanzi-practice-words.md',
-  })
+  }),
 );
 
 export class HanziSettingTab extends PluginSettingTab {
@@ -31,7 +30,7 @@ export class HanziSettingTab extends PluginSettingTab {
     app: App,
     plugin: Plugin,
     settings: HanziPluginSettings,
-    saveSettings: (settings: HanziPluginSettings) => Promise<void>
+    saveSettings: (settings: HanziPluginSettings) => Promise<void>,
   ) {
     super(app, plugin);
     this.plugin = plugin;
@@ -40,33 +39,33 @@ export class HanziSettingTab extends PluginSettingTab {
   }
 
   display(): void {
-    const { containerEl } = this;
+    const {containerEl} = this;
     containerEl.empty();
 
     new Setting(containerEl)
       .setName('History File Path')
       .setDesc('Path to the markdown file where practice history is saved.')
-      .addText((text) =>
+      .addText(text =>
         text
           .setPlaceholder('hanzi-practice-history.md')
           .setValue(this.settings.historyFilePath)
-          .onChange(async (value) => {
+          .onChange(async value => {
             this.settings.historyFilePath = value;
             await this.saveSettings(this.settings);
-          })
+          }),
       );
 
     new Setting(containerEl)
       .setName('Practice File Path')
       .setDesc('Path to the markdown file containing characters to learn.')
-      .addText((text) =>
+      .addText(text =>
         text
           .setPlaceholder('hanzi-practice-words.md')
           .setValue(this.settings.practiceFilePath)
-          .onChange(async (value) => {
+          .onChange(async value => {
             this.settings.practiceFilePath = value;
             await this.saveSettings(this.settings);
-          })
+          }),
       );
   }
 }
