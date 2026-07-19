@@ -137,3 +137,15 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+squashfs-root
+test_vault
+docs
+
+# E2E run artifacts
+dumps/
+e2e-run.log
+*-diff.png
+
+# Packaged plugin output
+dist/
