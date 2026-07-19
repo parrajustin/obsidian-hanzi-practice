@@ -20,6 +20,10 @@ OUT_DIR="$REPO_DIR/docker-artifacts"
 GOLDEN_DIR="$REPO_DIR/docker/__golden__"
 CONTAINER_GOLDEN_DIR="/workspace/obsidian-hanzi-practice/tests/__goldens__"
 
+# The AppImage is not committed (100MB GitHub limit) — fetch it if missing so
+# the staged context contains it for the Dockerfile's extract step.
+"$REPO_DIR/scripts/fetch_obsidian.sh"
+
 CTX="$(mktemp -d)"
 cleanup() { rm -rf "$CTX"; }
 trap cleanup EXIT

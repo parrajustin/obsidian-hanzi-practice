@@ -354,3 +354,9 @@ the clips are small. Validate with `grep RESULT: component-run.log` → `RESULT:
   command line. Filter out `node`/`-eo`/`-e` lines when counting real Obsidian processes.
 - Shell is fish; primary dir `/home/jrparra/git/obsidian-hanzi-practice`. The extracted AppImage
   lives at `squashfs-root/obsidian` (gitignored), profile at `/tmp/obsidian-test-profile`.
+- **The Obsidian AppImage is NOT committed** (118MB > GitHub's 100MB blob limit — it was
+  filter-branched out of history). `scripts/fetch_obsidian.sh` downloads the pinned version
+  from Obsidian's official releases if missing (`--extract` also produces `squashfs-root/`
+  for the host runners); `docker/build-and-run.sh` calls it automatically before staging.
+  `*.AppImage` is gitignored — never commit it, and bump the pin in the fetch script to
+  upgrade Obsidian versions.

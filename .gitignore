@@ -160,3 +160,8 @@ dist/
 
 # Docker E2E artifacts (dumps/log/goldens copied out of the container)
 docker-artifacts/
+
+# Obsidian AppImage for E2E — over GitHub's 100MB blob limit, never commit it.
+# Fetched on demand by scripts/fetch_obsidian.sh.
+*.AppImage
+*.AppImage.part
