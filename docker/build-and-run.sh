@@ -38,7 +38,10 @@ stage_pkg() {
       --exclude='./dist' \
       --exclude='./docker-artifacts' \
       --exclude='./e2e-run.log' \
+      --exclude='./component-run.log' \
       --exclude='./test_vault' \
+      --exclude='./component_vault' \
+      --exclude='./dumps-component' \
       -cf - . | tar -C "$CTX/$pkg" -xf -
 }
 stage_pkg obsidian-hanzi-practice

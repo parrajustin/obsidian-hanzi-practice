@@ -22,12 +22,16 @@ fi
 "$@"
 CODE=$?
 
-# Publish dumps + log to the host. (Goldens are handled via a direct bind mount
-# on tests/__goldens__ -> docker/__golden__, so nothing to copy for them.)
+# Publish dumps + logs to the host — for whichever runner(s) executed. (Goldens
+# are handled via a direct bind mount on tests/__goldens__ -> docker/__golden__,
+# so nothing to copy for them.)
 if [ -d /out ]; then
   cp -f e2e-run.log /out/ 2>/dev/null || true
+  cp -f component-run.log /out/ 2>/dev/null || true
   rm -rf /out/dumps 2>/dev/null || true
   cp -r dumps /out/dumps 2>/dev/null || true
+  rm -rf /out/dumps-component 2>/dev/null || true
+  cp -r dumps-component /out/dumps-component 2>/dev/null || true
 fi
 
 kill "$XVFB_PID" 2>/dev/null || true

@@ -4,16 +4,40 @@ import builtins from "builtin-modules";
 import fs from "fs";
 import path from "path";
 import zlib from "zlib";
+import cp from "child_process";
 
 const prod = (process.argv[2] === "production");
 
 const CEDICT_TXT = "cedict_1_0_ts_utf-8_mdbg_20240705_025126.txt";
+const STROKES_GZ = "hanzi-strokes.bin.gz";
+
+// Generate the medians-only stroke database (dist/hanzi-strokes.bin.gz) from
+// the hanzi-writer-data devDependency. The generator is TypeScript (it shares
+// the HZS1 codec with the runtime reader), so bundle it for node first, then
+// run it as a child process.
+async function genStrokeData(distDir) {
+	const genDir = path.join(process.cwd(), "node_modules", ".cache", "hanzi-gen");
+	const genOut = path.join(genDir, "gen_stroke_data.cjs");
+	await esbuild.build({
+		entryPoints: ["scripts/gen_stroke_data.ts"],
+		bundle: true,
+		platform: "node",
+		format: "cjs",
+		target: "node18",
+		outfile: genOut,
+		logLevel: "silent",
+	});
+	const dataDir = path.join(process.cwd(), "node_modules", "hanzi-writer-data");
+	cp.execFileSync(process.execPath, [genOut, dataDir, path.join(distDir, STROKES_GZ)], {
+		stdio: "inherit",
+	});
+}
 
 // Assemble a self-contained `dist/` that can be dropped into a vault's
 // .obsidian/plugins/hanzi-practice/ for a real install: the bundled main.js,
 // the manifest, and the CEDICT dictionary GZIPPED (the raw file is ~10MB; gzip
 // takes it to ~3MB). The plugin inflates it at runtime (see cedict_parser.ts).
-function emitDist() {
+async function emitDist() {
 	const distDir = path.join(process.cwd(), "dist");
 	fs.mkdirSync(distDir, { recursive: true });
 	fs.copyFileSync("main.js", path.join(distDir, "main.js"));
@@ -21,7 +45,8 @@ function emitDist() {
 	const raw = fs.readFileSync(CEDICT_TXT);
 	const gz = zlib.gzipSync(raw, { level: zlib.constants.Z_BEST_COMPRESSION });
 	fs.writeFileSync(path.join(distDir, `${CEDICT_TXT}.gz`), gz);
-	console.log(`dist/: main.js, manifest.json, ${CEDICT_TXT}.gz ` +
+	await genStrokeData(distDir);
+	console.log(`dist/: main.js, manifest.json, ${STROKES_GZ}, ${CEDICT_TXT}.gz ` +
 		`(${(raw.length / 1e6).toFixed(1)}MB -> ${(gz.length / 1e6).toFixed(1)}MB gz)`);
 }
 
@@ -57,7 +82,7 @@ const context = await esbuild.context({
 
 if (prod) {
 	await context.rebuild();
-	emitDist();
+	await emitDist();
 	await context.dispose(); // stop the esbuild service cleanly (avoids a shutdown deadlock)
 	process.exit(0);
 } else {

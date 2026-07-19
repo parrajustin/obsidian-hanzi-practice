@@ -3,6 +3,8 @@ import { HanziPluginSettings, HanziSettingTab, SETTINGS_SCHEMA } from './setting
 import { HanziPracticeView } from './views/hanzi_view';
 import { AddCharacterModal } from './commands/add_character_modal';
 import { CedictParser } from './dictionary/cedict_parser';
+import { StrokeDataReader } from './data/stroke_codec';
+import { loadStrokeData } from './data/stroke_data';
 import { Ok, Result } from 'standard-ts-lib/src/result';
 import { StatusError } from 'standard-ts-lib/src/status_error';
 
@@ -13,9 +15,16 @@ export const HANZI_VIEW_TYPE = 'hanzi-practice-view';
 // the practice list) — never on the hot path of opening the practice view.
 export const CEDICT_FILE = 'cedict_1_0_ts_utf-8_mdbg_20240705_025126.txt.gz';
 
+// The medians-only stroke database (generated at build time from
+// hanzi-writer-data), also shipped gzipped next to main.js. The reader keeps
+// the blob compressed-in-file / raw-in-memory and decodes one character at a
+// time, so loading it is cheap enough for the practice view's open path.
+export const STROKES_FILE = 'hanzi-strokes.bin.gz';
+
 export default class HanziPracticePlugin extends Plugin {
   settings!: HanziPluginSettings;
   private dictionary: CedictParser | null = null;
+  private strokeData: StrokeDataReader | null = null;
 
   /**
    * Lazily load + parse the CEDICT dictionary, caching it for the plugin's
@@ -29,6 +38,16 @@ export default class HanziPracticePlugin extends Plugin {
     if (!res.ok) return res as unknown as Result<CedictParser, StatusError>;
     this.dictionary = parser;
     return Ok(parser);
+  }
+
+  /** Lazily load the stroke database, cached for the plugin's lifetime. */
+  async getStrokeData(): Promise<Result<StrokeDataReader, StatusError>> {
+    if (this.strokeData) return Ok(this.strokeData);
+    const dataPath = this.manifest.dir ? `${this.manifest.dir}/${STROKES_FILE}` : STROKES_FILE;
+    const res = await loadStrokeData(this.app, dataPath);
+    if (!res.ok) return res;
+    this.strokeData = res.val;
+    return Ok(this.strokeData);
   }
 
   async onload() {

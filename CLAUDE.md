@@ -1,8 +1,9 @@
 # Hanzi Practice — Obsidian Plugin
 
-Obsidian plugin for practicing Chinese characters (hanzi): draw strokes with `hanzi-writer`,
-pick the correct pinyin/tone, get graded via a SuperMemo-2-style spaced-repetition engine, and
-track history in plain markdown files inside the vault.
+Obsidian plugin for practicing Chinese characters (hanzi): draw strokes with the plugin's own
+minimal quiz writer (`src/writer/`, graded against a shipped medians-only stroke database —
+no hanzi-writer, no CDN), pick the correct pinyin/tone, get graded via a SuperMemo-2-style
+spaced-repetition engine, and track history in plain markdown files inside the vault.
 
 ---
 
@@ -15,8 +16,28 @@ track history in plain markdown files inside the vault.
   add-character modal uses it. `CEDICT_FILE` names the shipped gzip.
 - `src/views/hanzi_view.ts` — the `HanziPracticeView` (ItemView). Picks the next due char, reads
   its **cached** pinyin + English def **from the practice list** (never CEDICT), renders the
-  `Meaning:` line (`.hanzi-meaning`) + `PinyinSelector` (`.tone-selector`) + hanzi-writer draw
-  grid, grades on quiz complete, appends to history, then reopens for the next char.
+  `Meaning:` line (`.hanzi-meaning`) + `PinyinSelector` (`.tone-selector`) + the quiz writer's
+  draw box, grades on quiz complete, appends to history, then reopens for the next char. Gets
+  the char's medians from `plugin.getStrokeData()` (lazy, cached; `.hanzi-no-stroke-data`
+  message if the char isn't in the database).
+- `src/writer/` — the in-repo replacement for `hanzi-writer` (quiz-only). `quiz_writer.ts` is
+  `HanziQuizWriter`: renders an SVG, captures pointer strokes, grades each against the current
+  stroke's median, and after 3 misses on the same stroke highlights it as a hint
+  (`.hanzi-stroke-hint`, orange, static until the stroke passes). Correct strokes render as
+  `.hanzi-stroke-done`; `showOutline()`/`animateCharacter()` back the Give Up flow.
+  `stroke_matcher.ts` is a simplified port of hanzi-writer's `strokeMatches` (same five checks
+  + thresholds: avg distance ≤350 (×0.5 after stroke 0), start/end ≤250, direction cosine >0,
+  normalized-Fréchet ≤0.4, length ratio ≥0.35) except avg distance is measured to median
+  *segments* (accurate on simplified polylines). `geometry.ts` has the curve math.
+- `src/data/` — the medians-only stroke database. `stroke_codec.ts` defines the binary `HZS1`
+  format (per char: codepoint + strokes as int16 point pairs) with `encodeStrokeData` and the
+  random-access `StrokeDataReader` (one linear scan builds a codepoint→offset index; each
+  char's medians decode on demand — nothing large is materialized). `stroke_data.ts` loads +
+  gunzips `hanzi-strokes.bin.gz` from the plugin folder (same magic-byte pattern as CEDICT).
+- `scripts/gen_stroke_data.ts` — build-time generator: reads the `hanzi-writer-data`
+  **devDependency** (data source only — never shipped), keeps ONLY the medians, simplifies
+  polylines (Douglas-Peucker ε=10 of the 1024-unit box), encodes + gzips. 47MB of per-char
+  JSON → ~1.4MB shipped.
 - `src/components/pinyin_selector.ts` — tone multiple-choice buttons: correct pinyin + 4
   distractors (from `ConstructOtherOptions`), Fisher-Yates shuffled. Wrong pick → `5px solid red`
   + increments a mistake counter; correct → green + `onComplete(mistakes)`.
@@ -62,6 +83,13 @@ The practice view therefore never loads CEDICT. The dictionary ships **gzipped**
 runtime. This is the general pattern: **do the expensive lookup once, at write time, and cache
 the result into the data file that the hot path already reads.**
 
+### The stroke-data flow — shipped, not fetched
+Stroke medians ship with the plugin as `hanzi-strokes.bin.gz` (~1.4MB, generated at build time
+from the `hanzi-writer-data` devDependency; see `scripts/gen_stroke_data.ts`). The practice
+view calls `plugin.getStrokeData()` (lazy, cached for the plugin lifetime), which gunzips the
+blob and hands it to `StrokeDataReader` — per-character decode on demand. **No network is ever
+needed**; the old hanzi-writer CDN dependency is gone.
+
 ### Data files (in the vault)
 - `hanzi-practice-words.md` — one entry per line, **TAB-separated**: `char⇥pinyin⇥english`
   (e.g. `好\thao3\tgood/appropriate; …`). `pinyin` is numeric CEDICT form. Plain one-char lines
@@ -83,9 +111,11 @@ due immediately; passing → review #1 `+1` day, #2 `+6`, #3+ `lastReviewDay + c
 `npm run build` → `node esbuild.config.mjs production`:
 1. Bundles `src/main.ts` → `main.js` (esbuild, `obsidian`/`electron`/codemirror/node-builtins
    external, format `cjs`).
-2. Assembles `dist/` (gitignored) for real installs: `main.js`, `manifest.json`, and the
-   **gzipped** CEDICT. **A real install = copy `dist/*` into `<vault>/.obsidian/plugins/
-   hanzi-practice/`.** BRAT/manual users get the dictionary automatically this way.
+2. Assembles `dist/` (gitignored) for real installs: `main.js`, `manifest.json`, the
+   **gzipped** CEDICT, and `hanzi-strokes.bin.gz` (the generator is TS sharing the runtime
+   codec, so the config bundles it to `node_modules/.cache/hanzi-gen/` and runs it with node).
+   **A real install = copy `dist/*` into `<vault>/.obsidian/plugins/hanzi-practice/`.**
+   BRAT/manual users get both data files automatically this way.
 3. Disposes the esbuild context before exit (a lingering context + `process.exit` deadlocks the
    esbuild Go service).
 
@@ -96,9 +126,11 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
 
 ## Unit tests
 
-`npm test` / `npx jest` — 10 tests across `cedict_parser` / `history_manager` /
-`spaced_repetition`, using `tests/__mocks__/obsidian.ts` for the `obsidian` module. Any new
-`obsidian` API used in a jest-reachable file must be added to that mock.
+`npm test` / `npx jest` — 21 tests across `cedict_parser` / `history_manager` /
+`spaced_repetition` / `stroke_codec` (HZS1 round-trip incl. negative + astral-plane chars) /
+`stroke_matcher` (accepts median replay + jitter, rejects backwards/wrong/far strokes), using
+`tests/__mocks__/obsidian.ts` for the `obsidian` module. Any new `obsidian` API used in a
+jest-reachable file must be added to that mock.
 
 ---
 
@@ -146,8 +178,14 @@ Then re-run `npm run test:e2e` and confirm every `[visual]` line reports `matche
 4b. Re-adding `好` keeps the modal open with a non-empty `.hanzi-add-error` (duplicate error).
 5. `hanzi-practice-words.md` contains each char **and** `好` has cached `hao3` + a definition.
 6. Practice view is in `.mod-root` (center pane, not a sidebar) and renders `.hanzi-meaning` +
-   `.tone-selector` buttons from the cached data. Grading is **simulated** (`handleQuizComplete`
-   called directly — hanzi-writer stroke input can't be puppeteered).
+   `.tone-selector` buttons from the cached data.
+6b. Stroke quiz driven with REAL mouse input (puppeteer `page.mouse` → pointer events): a
+   deliberately-wrong corner scribble ×3 (each must increment `view.strokeMistakes`), then the
+   third miss must show the hint highlight (`.hanzi-stroke-hint`) — screenshotted as the
+   `step6-stroke-hint` golden — then the correct stroke is drawn by replaying
+   `writer.getStrokeDisplayPoints(0)` and must be accepted (index advances, hint clears,
+   `.hanzi-stroke-done` renders). Full-quiz grading is then **simulated**
+   (`handleQuizComplete` called directly) to exercise history writing.
 7. `hanzi-practice-history.md` gets the graded line.
 8. Settings tab opens.
 
@@ -195,12 +233,46 @@ npm run test:e2e:docker:goldens    # same, but regenerate goldens inside the con
   dark 1280×1000. The dir is **bind-mounted** over the container's golden path, so Docker runs
   compare against it and `:docker:goldens` regenerates straight into it (auto-populated on first
   run when empty). A container is a *fixed* render environment, so these goldens are reproducible
-  across machines/CI — the ideal home for pixel goldens (see gotcha #4). Current run: all 8 match
-  0–16 px.
+  across machines/CI — the ideal home for pixel goldens (see gotcha #4). Current run: all 9
+  (incl. `step6-stroke-hint`) match.
 - **Validate the same way**: `grep RESULT: docker-artifacts/e2e-run.log` → `RESULT: PASS`; inspect
   `docker-artifacts/dumps/*.png`. Functional assertions all pass; leaves **0** processes on the host.
 - Image is ~2.1 GB (Electron libs + CJK fonts + extracted app). First build is slow (base image +
   apt + `pnpm install`); layers cache so re-runs are fast.
+
+---
+
+## Component golden test — the quiz writer in isolation
+
+`tests/component_runner.ts` + `tests/component_harness.ts` test ONLY `src/writer` + `src/data`,
+with no plugin, vault content, or Obsidian UI in frame. The runner launches the extracted
+Obsidian AppImage purely as a Chromium host (empty vault → no trust prompt; port **9226** +
+`/tmp/obsidian-component-profile`, separate from the E2E's so the suites can't
+single-instance-lock each other), clears the window body, injects the bundled harness
+(`tests/component_harness.js`), and mounts a lone `HanziQuizWriter` on a fixed 320px white
+stage fed with the REAL shipped `dist/hanzi-strokes.bin.gz` (gunzipped in node → base64 →
+`StrokeDataReader` in page). All input is synthetic pointer events at fixed coordinates and
+every screenshot is **clipped to the stage**, so goldens contain nothing but the component —
+pixel-stable and font-free.
+
+```bash
+npm run test:component                  # host (opens a window)
+npm run test:component:goldens         # host, regenerate component-* goldens
+npm run test:component:docker          # headless in the container
+npm run test:component:docker:goldens  # regenerate container goldens (docker/__golden__)
+```
+
+Golden states (`component-*.png`, in `tests/__goldens__` / `docker/__golden__` alongside the
+E2E's, **prefix-scoped**: each runner's `E2E_REGEN_GOLDENS=1` only deletes its own prefix):
+`empty`, `ink` (mid-stroke, pointer held down), `hint` (3 misses on stroke 0), `progress`
+(3 strokes accepted), `complete`, `outline`, `animation-start` (transitions disabled + huge
+per-stroke delay ⇒ deterministic first-stroke-only frame), `animation-end`. Functional
+assertions (mistake counts, hint show/clear, `onMistake`/`onCorrectStroke`/`onComplete`
+payloads, animated-stroke counts) are the source of truth; pixel diffs stay advisory
+(`E2E_STRICT_VISUAL=1` to make them fatal), with a tighter 100px-diff warning threshold since
+the clips are small. Validate with `grep RESULT: component-run.log` → `RESULT: PASS`; debug via
+`dumps-component/` (`component-run.log` and `dumps-component/` are copied to
+`docker-artifacts/` on container runs).
 
 ---
 
@@ -225,14 +297,12 @@ npm run test:e2e:docker:goldens    # same, but regenerate goldens inside the con
    `*-diff.png` on mismatch but does **not** fail the run — the functional assertions are the
    source of truth. `E2E_STRICT_VISUAL=1` makes visual diffs fatal. Regenerate goldens on the
    machine you validate on (host → `tests/__goldens__`, container → `docker/__golden__`).
-5. **`hanzi-writer` loads stroke data asynchronously (from its CDN).** The grading simulation
-   calls `handleQuizComplete`, which reads `writer._character.strokes` — so STEP 6 first **polls
-   for `view.writer._character` to load** before grading, else it throws `Cannot read properties
-   of undefined (reading 'strokes')`, no history is written, and STEP 7 fails. A fast/warm host
-   won this race silently; the container (colder CDN) exposed it. Lesson: never assume an async
-   third-party load has completed just because a fixed `delay()` elapsed — poll for the actual
-   state. (The container run therefore needs outbound network for the hanzi-writer-data CDN, same
-   as a real user's Obsidian.)
+5. **The quiz writer is created asynchronously** (the view awaits the gunzip + index of the
+   shipped stroke DB before constructing it), so STEP 6 **polls for `view.writer` +
+   `strokeCount > 0`** before driving the quiz — never assume an async load finished because a
+   fixed `delay()` elapsed; poll for the actual state. (Historic version of this gotcha: the
+   old hanzi-writer fetched stroke data from its CDN, so the container needed outbound network
+   and a cold CDN exposed the race. Stroke data now ships with the plugin — no network needed.)
 
 ---
 

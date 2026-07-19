@@ -145,7 +145,12 @@ function regenGoldensIfRequested() {
     let removed = 0;
     try {
         for (const f of fs.readdirSync(goldenDir)) {
-            if (f.endsWith('.png')) { fs.rmSync(path.join(goldenDir, f)); removed++; }
+            // Scoped: never touch the component runner's `component-*.png`
+            // goldens — each runner regenerates only its own prefix.
+            if (f.endsWith('.png') && !f.startsWith('component-')) {
+                fs.rmSync(path.join(goldenDir, f));
+                removed++;
+            }
         }
     } catch (e) { /* dir may not exist yet */ }
     fs.mkdirSync(goldenDir, { recursive: true });
@@ -189,6 +194,14 @@ async function run() {
         const raw = fs.readFileSync(path.join(__dirname, '..', 'cedict_1_0_ts_utf-8_mdbg_20240705_025126.txt'));
         fs.writeFileSync(destGz, zlib.gzipSync(raw));
     }
+    // Ship the medians-only stroke database too (generated into dist/ by the
+    // production build). The quiz writer needs it — there is no CDN fallback.
+    const strokesGz = 'hanzi-strokes.bin.gz';
+    const distStrokes = path.join(__dirname, '..', 'dist', strokesGz);
+    if (!fs.existsSync(distStrokes)) {
+        throw new Error(`${distStrokes} not found — run \`npm run build\` first (it generates the stroke database).`);
+    }
+    fs.copyFileSync(distStrokes, path.join(pluginPath, strokesGz));
 
     // Enable plugin and disable safe mode
     fs.writeFileSync(path.join(vaultPath, '.obsidian', 'app.json'), JSON.stringify({ safeMode: false }));
@@ -481,25 +494,103 @@ async function run() {
 
         await takeAndCompareScreenshot(page, 'step6-practice-view');
 
-        // hanzi-writer loads its character stroke data ASYNChronously (from its
-        // CDN). handleQuizComplete reads `writer._character.strokes`, so wait for
-        // that data to arrive before simulating the grade — otherwise it throws
-        // `Cannot read properties of undefined (reading 'strokes')`. (On a fast/
-        // warm host this raced-and-won; in the container it exposed the flake.)
+        // The quiz writer is created asynchronously (the view first loads +
+        // gunzips the plugin-shipped stroke database — no network involved).
+        // Wait for it before driving the stroke quiz.
         let writerReady = false;
         for (let i = 0; i < 30; i++) {
             writerReady = await page.evaluate(() => {
                 const leaves = (window as any).app.workspace.getLeavesOfType('hanzi-practice-view');
                 const view = leaves[0] && leaves[0].view;
-                return !!(view && view.writer && view.writer._character && view.writer._character.strokes);
+                return !!(view && view.writer && view.writer.strokeCount > 0);
             }).catch(() => false);
             if (writerReady) break;
             await delay(1000);
         }
         if (!writerReady) {
             await dump(page, 'STEP6-writer-not-loaded');
-            throw new Error('hanzi-writer character data did not load (needs network to the hanzi-writer-data CDN)');
+            throw new Error('Quiz writer did not initialize (stroke database missing or failed to load)');
         }
+
+        // STEP 6b: Stroke quiz — draw the FIRST stroke wrong three times. Each
+        // miss must increment the mistake counter, and the third miss must make
+        // the writer highlight the expected stroke as a hint.
+        console.log('STEP 6b: Drawing a wrong stroke repeatedly to trigger the hint...');
+        const svgRect = await page.evaluate(() => {
+            const svg = document.querySelector('.workspace-leaf-content[data-type="hanzi-practice-view"] #hanzi-draw-container svg');
+            if (!svg) return null;
+            const r = svg.getBoundingClientRect();
+            return { left: r.left, top: r.top, width: r.width, height: r.height };
+        });
+        if (!svgRect) {
+            throw new Error('Quiz writer SVG not found in the practice view.');
+        }
+        const drawStroke = async (points: Array<{ x: number; y: number }>) => {
+            await page.mouse.move(points[0].x, points[0].y);
+            await page.mouse.down();
+            for (const p of points.slice(1)) {
+                await page.mouse.move(p.x, p.y, { steps: 4 });
+            }
+            await page.mouse.up();
+            await delay(300);
+        };
+        // A deliberately-wrong stroke: a short scribble in the top-right corner
+        // of the drawing box, nowhere near 好's first stroke (which starts
+        // top-center-left and sweeps down-left).
+        const wrongStroke = [
+            { x: svgRect.left + svgRect.width * 0.88, y: svgRect.top + svgRect.height * 0.10 },
+            { x: svgRect.left + svgRect.width * 0.95, y: svgRect.top + svgRect.height * 0.16 },
+        ];
+        for (let attempt = 1; attempt <= 3; attempt++) {
+            await drawStroke(wrongStroke);
+            const mistakes = await page.evaluate(() => {
+                const view = (window as any).app.workspace.getLeavesOfType('hanzi-practice-view')[0].view;
+                return view.strokeMistakes;
+            });
+            if (mistakes !== attempt) {
+                await dump(page, `STEP6b-mistake-not-counted-${attempt}`);
+                throw new Error(`Wrong stroke attempt ${attempt} was not graded as a mistake (counter=${mistakes})`);
+            }
+        }
+        // The third miss must surface the hint: the expected stroke highlighted.
+        const hintShown = await page.evaluate(() => {
+            const view = document.querySelector('.workspace-leaf-content[data-type="hanzi-practice-view"]');
+            const hint = view && view.querySelector('.hanzi-stroke-hint');
+            return !!hint && (hint as SVGElement).getBoundingClientRect().width > 0;
+        });
+        if (!hintShown) {
+            await dump(page, 'STEP6b-no-hint');
+            throw new Error('Hint highlight (.hanzi-stroke-hint) did not appear after 3 misses on the same stroke!');
+        }
+        console.log('Verified hint highlight after 3 misses.');
+        await takeAndCompareScreenshot(page, 'step6-stroke-hint');
+
+        // Now draw the stroke CORRECTLY (replay the expected stroke's median in
+        // screen coordinates): it must be accepted, advance the quiz, and clear
+        // the hint.
+        const strokePoints = await page.evaluate(() => {
+            const view = (window as any).app.workspace.getLeavesOfType('hanzi-practice-view')[0].view;
+            return view.writer.getStrokeDisplayPoints(0);
+        });
+        await drawStroke(strokePoints.map((p: { x: number; y: number }) => ({
+            x: svgRect.left + p.x,
+            y: svgRect.top + p.y,
+        })));
+        const afterCorrect = await page.evaluate(() => {
+            const view = (window as any).app.workspace.getLeavesOfType('hanzi-practice-view')[0].view;
+            const leafEl = document.querySelector('.workspace-leaf-content[data-type="hanzi-practice-view"]');
+            return {
+                strokeIndex: view.writer.currentStrokeIndex,
+                hintGone: !leafEl || !leafEl.querySelector('.hanzi-stroke-hint'),
+                doneStrokes: leafEl ? leafEl.querySelectorAll('.hanzi-stroke-done').length : 0,
+            };
+        });
+        if (afterCorrect.strokeIndex !== 1 || !afterCorrect.hintGone || afterCorrect.doneStrokes !== 1) {
+            await dump(page, 'STEP6b-correct-stroke-rejected');
+            throw new Error(`Correct stroke was not accepted: ${JSON.stringify(afterCorrect)}`);
+        }
+        console.log('Verified correct stroke accepted, hint cleared, stroke rendered.');
+        await dump(page, 'step6b-correct-stroke');
 
         console.log('Simulating grading completion...');
         const graded = await page.evaluate(() => {

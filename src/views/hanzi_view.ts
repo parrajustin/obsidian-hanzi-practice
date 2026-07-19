@@ -1,13 +1,13 @@
 import { ItemView, WorkspaceLeaf } from 'obsidian';
-import HanziWriter from 'hanzi-writer';
 import { HANZI_VIEW_TYPE } from '../main';
 
 import HanziPracticePlugin from '../main';
 import { HistoryManager } from '../utils/history_manager';
 import { PinyinSelector } from '../components/pinyin_selector';
+import { HanziQuizWriter } from '../writer/quiz_writer';
 
 export class HanziPracticeView extends ItemView {
-  private writer!: HanziWriter;
+  private writer: HanziQuizWriter | null = null;
   private currentCharacter = '汉';
   private targetPinyin = '';
   private englishDef = '';
@@ -80,16 +80,24 @@ export class HanziPracticeView extends ItemView {
     drawContainer.style.border = '1px solid #ccc';
     drawContainer.style.margin = '20px 0';
 
-    this.writer = HanziWriter.create(drawContainer, this.currentCharacter, {
-      width: 300,
-      height: 300,
-      padding: 5,
-      showOutline: false,
-      strokeAnimationSpeed: 1,
-      delayBetweenStrokes: 1000,
-    });
-
-    this.startQuiz();
+    // Stroke medians come from the plugin-shipped database (lazy-loaded and
+    // cached on the plugin; decoded per character) — no network, no CDN.
+    this.writer = null;
+    const strokeDataRes = await this.plugin.getStrokeData();
+    const medians = strokeDataRes.ok ? strokeDataRes.val.get(this.currentCharacter) : null;
+    if (medians) {
+      this.writer = new HanziQuizWriter(drawContainer, this.currentCharacter, medians, {
+        width: 300,
+        height: 300,
+        padding: 5,
+      });
+      this.startQuiz();
+    } else {
+      drawContainer.createEl('span', {
+        text: `No stroke data available for ${this.currentCharacter}.`,
+        cls: 'hanzi-no-stroke-data',
+      });
+    }
 
     const controls = container.createDiv();
     const btnGiveUp = controls.createEl('button', { text: 'Give Up' });
@@ -99,27 +107,24 @@ export class HanziPracticeView extends ItemView {
   startQuiz() {
     this.strokeMistakes = 0;
     this.pinyinMistakes = 0;
-    this.writer.quiz({
-      onMistake: (strokeData: any) => {
+    this.writer?.quiz({
+      onMistake: () => {
         this.strokeMistakes++;
       },
-      onComplete: (summaryData: any) => {
+      onComplete: (summaryData) => {
         this.handleQuizComplete(summaryData);
       }
     });
   }
 
   handleGiveUp() {
-    this.writer.showOutline();
-    // In actual implementation, we might move to a "StateGiveUpPractice" 
-    // where they have to trace it perfectly to proceed.
-    // For now, let's just show it so they can see.
-    this.writer.animateCharacter();
+    // Show the full character skeleton, then animate it stroke by stroke.
+    this.writer?.showOutline();
+    this.writer?.animateCharacter();
   }
 
   async handleQuizComplete(summaryData: { character: string, totalMistakes: number }) {
-    // @ts-ignore
-    const realTotalStrokes = this.writer._character.strokes.length;
+    const realTotalStrokes = this.writer?.strokeCount ?? 1;
     const percentMistakes = summaryData.totalMistakes / realTotalStrokes;
     
     let baseScore = 0;
@@ -148,6 +153,7 @@ export class HanziPracticeView extends ItemView {
   }
 
   async onClose() {
-    // Cleanup
+    this.writer?.destroy();
+    this.writer = null;
   }
 }

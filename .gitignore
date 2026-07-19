@@ -6,6 +6,9 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+# JS files
+*.js
+
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
@@ -146,6 +149,11 @@ docs
 dumps/
 e2e-run.log
 *-diff.png
+tests/**/*.js
+
+# Component golden-test artifacts
+dumps-component/
+component_vault
 
 # Packaged plugin output
 dist/
