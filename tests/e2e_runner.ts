@@ -481,21 +481,41 @@ async function run() {
 
         await takeAndCompareScreenshot(page, 'step6-practice-view');
 
-        // Wait for writer to load
-        await delay(2000);
+        // hanzi-writer loads its character stroke data ASYNChronously (from its
+        // CDN). handleQuizComplete reads `writer._character.strokes`, so wait for
+        // that data to arrive before simulating the grade — otherwise it throws
+        // `Cannot read properties of undefined (reading 'strokes')`. (On a fast/
+        // warm host this raced-and-won; in the container it exposed the flake.)
+        let writerReady = false;
+        for (let i = 0; i < 30; i++) {
+            writerReady = await page.evaluate(() => {
+                const leaves = (window as any).app.workspace.getLeavesOfType('hanzi-practice-view');
+                const view = leaves[0] && leaves[0].view;
+                return !!(view && view.writer && view.writer._character && view.writer._character.strokes);
+            }).catch(() => false);
+            if (writerReady) break;
+            await delay(1000);
+        }
+        if (!writerReady) {
+            await dump(page, 'STEP6-writer-not-loaded');
+            throw new Error('hanzi-writer character data did not load (needs network to the hanzi-writer-data CDN)');
+        }
 
         console.log('Simulating grading completion...');
-        await page.evaluate(() => {
+        const graded = await page.evaluate(() => {
             const workspace = (window as any).app.workspace;
             const leaves = workspace.getLeavesOfType('hanzi-practice-view');
-            if (leaves.length > 0) {
-                const view = leaves[0].view;
-                view.currentCharacter = '好'; // hardcode to the one we expect in test
-                view.pinyinMistakes = 0; // zero mistakes simulated
-                view.handleQuizComplete({ character: view.currentCharacter, totalMistakes: 0 });
-            }
+            if (leaves.length === 0) return false;
+            const view = leaves[0].view;
+            view.currentCharacter = '好'; // hardcode to the one we expect in test
+            view.pinyinMistakes = 0; // zero mistakes simulated
+            view.handleQuizComplete({ character: view.currentCharacter, totalMistakes: 0 });
+            return true;
         });
-        await delay(1000);
+        if (!graded) {
+            throw new Error('Could not find the practice view to simulate grading.');
+        }
+        await delay(1500);
         await takeAndCompareScreenshot(page, 'step6-graded');
 
         // STEP 7: Check the md for my attempt and score

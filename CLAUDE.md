@@ -172,6 +172,36 @@ Then re-run `npm run test:e2e` and confirm every `[visual]` line reports `matche
   plus a `FAILURE` dump on any thrown error — read these to see exactly where/why it stalled.
 - **`e2e-run.log`** (gitignored): full log incl. Obsidian stdout/stderr and `RESULT:`.
 
+### Running the E2E in Docker (fully headless — no host windows)
+The default `npm run test:e2e` launches real Obsidian windows on your desktop (`DISPLAY=:0`).
+To run it isolated & headless instead:
+```bash
+npm run test:e2e:docker            # build the image + run the E2E under Xvfb
+npm run test:e2e:docker:goldens    # same, but regenerate goldens inside the container
+```
+- **`docker/Dockerfile`** — `node:24-bookworm-slim` + Xvfb + **`fonts-noto-cjk`** (required, else
+  hanzi render as tofu) + the Electron/Chromium runtime libs. Does **all** setup at build time:
+  `pnpm install` (uses **pnpm 11** — the repo's `pnpm-workspace.yaml` `allowBuilds:` is a pnpm
+  10/11 feature; pnpm 9 misreads it), **extracts the AppImage** (`--appimage-extract`, no FUSE,
+  then deletes the 124MB AppImage), and pre-builds `main.js`/`dist`/the runner bundle.
+- **`docker/entrypoint.sh`** — starts `Xvfb :99`, sets `DISPLAY=:99`, runs the E2E, and copies
+  `dumps/` + `e2e-run.log` (and regenerated `__goldens__/`) to the mounted `/out`.
+- **`docker/build-and-run.sh`** — stages a temp build context containing the three repos as
+  siblings (needed for the `file:../standard-*` deps that live outside this repo), builds, and
+  runs with `--shm-size=512m`, mounting `docker-artifacts/` (gitignored) as `/out` **and**
+  `docker/__golden__` over the container's `tests/__goldens__`.
+- **Container goldens live in `docker/__golden__/` (committed)** — separate from the host's
+  `tests/__goldens__` because the container renders **light** theme at **1024×800** vs the host's
+  dark 1280×1000. The dir is **bind-mounted** over the container's golden path, so Docker runs
+  compare against it and `:docker:goldens` regenerates straight into it (auto-populated on first
+  run when empty). A container is a *fixed* render environment, so these goldens are reproducible
+  across machines/CI — the ideal home for pixel goldens (see gotcha #4). Current run: all 8 match
+  0–16 px.
+- **Validate the same way**: `grep RESULT: docker-artifacts/e2e-run.log` → `RESULT: PASS`; inspect
+  `docker-artifacts/dumps/*.png`. Functional assertions all pass; leaves **0** processes on the host.
+- Image is ~2.1 GB (Electron libs + CJK fonts + extracted app). First build is slow (base image +
+  apt + `pnpm install`); layers cache so re-runs are fast.
+
 ---
 
 ## E2E gotchas & root causes (hard-won — read before touching the runner)
@@ -194,7 +224,15 @@ Then re-run `npm run test:e2e` and confirm every `[visual]` line reports `matche
    comparison is therefore **advisory**: `takeAndCompareScreenshot` logs a `WARN` + writes a
    `*-diff.png` on mismatch but does **not** fail the run — the functional assertions are the
    source of truth. `E2E_STRICT_VISUAL=1` makes visual diffs fatal. Regenerate goldens on the
-   machine you validate on.
+   machine you validate on (host → `tests/__goldens__`, container → `docker/__golden__`).
+5. **`hanzi-writer` loads stroke data asynchronously (from its CDN).** The grading simulation
+   calls `handleQuizComplete`, which reads `writer._character.strokes` — so STEP 6 first **polls
+   for `view.writer._character` to load** before grading, else it throws `Cannot read properties
+   of undefined (reading 'strokes')`, no history is written, and STEP 7 fails. A fast/warm host
+   won this race silently; the container (colder CDN) exposed it. Lesson: never assume an async
+   third-party load has completed just because a fixed `delay()` elapsed — poll for the actual
+   state. (The container run therefore needs outbound network for the hanzi-writer-data CDN, same
+   as a real user's Obsidian.)
 
 ---
 
@@ -226,6 +264,14 @@ Then re-run `npm run test:e2e` and confirm every `[visual]` line reports `matche
 - **Prefer a self-writing run log over shell redirection for background/GUI processes.** The
   runner appends to `e2e-run.log` via `fs` and routes the child's stdout/stderr through it, so
   the record survives regardless of how the process is launched or killed.
+- **Containerize GUI E2E with Xvfb for isolation + reproducibility.** Running a GUI app's E2E on
+  the dev desktop pops windows and couples goldens to the host's theme/DPI/fonts. A container with
+  a virtual X display (`Xvfb`) fixes both: no windows escape, and the render environment is
+  pinned. Keys that made it painless here: the AppImage extracts without FUSE (`--appimage-extract`,
+  so no `--cap-add SYS_ADMIN`), the runner talks over a CDP port (display-agnostic), and it already
+  passes `--no-sandbox --disable-gpu --disable-dev-shm-usage`. Watch-outs: install CJK/app fonts
+  (or text renders as tofu), match the host package-manager version, and — because the deps live
+  outside the repo (`file:../`) — stage a build context that includes the siblings.
 
 ---
 

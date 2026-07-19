@@ -149,3 +149,6 @@ e2e-run.log
 
 # Packaged plugin output
 dist/
+
+# Docker E2E artifacts (dumps/log/goldens copied out of the container)
+docker-artifacts/

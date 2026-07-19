@@ -9,7 +9,9 @@
     "test": "jest",
     "build:e2e": "esbuild tests/e2e_runner.ts --bundle --platform=node --target=node18 --outfile=tests/e2e_runner.js",
     "test:e2e": "npm run build && npm run build:e2e && node tests/e2e_runner.js",
-    "test:e2e:goldens": "npm run build && npm run build:e2e && E2E_REGEN_GOLDENS=1 node tests/e2e_runner.js"
+    "test:e2e:goldens": "npm run build && npm run build:e2e && E2E_REGEN_GOLDENS=1 node tests/e2e_runner.js",
+    "test:e2e:docker": "bash docker/build-and-run.sh",
+    "test:e2e:docker:goldens": "E2E_REGEN_GOLDENS=1 bash docker/build-and-run.sh node tests/e2e_runner.js"
   },
   "dependencies": {
     "hanzi-writer": "^3.5.0",
