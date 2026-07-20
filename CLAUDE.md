@@ -116,6 +116,10 @@ due immediately; passing → review #1 `+1` day, #2 `+6`, #3+ `lastReviewDay + c
    codec, so the config bundles it to `node_modules/.cache/hanzi-gen/` and runs it with node).
    **A real install = copy `dist/*` into `<vault>/.obsidian/plugins/hanzi-practice/`.**
    BRAT/manual users get both data files automatically this way.
+   Also packs those four files into `dist/hanzi-practice-<version>.tar.gz` (`emitTarball`) —
+   the release asset our BRAT fork downloads, extracts, and fully installs (it needs
+   `main.js` + `manifest.json` at the archive root; stale-version tarballs are deleted).
+   See `/home/jrparra/git/MonoParra/PACKAGE.md` for the full release/BRAT flow.
 3. Disposes the esbuild context before exit (a lingering context + `process.exit` deadlocks the
    esbuild Go service).
 

@@ -37,6 +37,9 @@ async function genStrokeData(distDir) {
 // .obsidian/plugins/hanzi-practice/ for a real install: the bundled main.js,
 // the manifest, and the CEDICT dictionary GZIPPED (the raw file is ~10MB; gzip
 // takes it to ~3MB). The plugin inflates it at runtime (see cedict_parser.ts).
+// Also packs everything into dist/hanzi-practice-<version>.tar.gz — the single
+// release asset the BRAT fork downloads and extracts (it requires main.js +
+// manifest.json at the archive root and installs every file it contains).
 async function emitDist() {
 	const distDir = path.join(process.cwd(), "dist");
 	fs.mkdirSync(distDir, { recursive: true });
@@ -46,8 +49,25 @@ async function emitDist() {
 	const gz = zlib.gzipSync(raw, { level: zlib.constants.Z_BEST_COMPRESSION });
 	fs.writeFileSync(path.join(distDir, `${CEDICT_TXT}.gz`), gz);
 	await genStrokeData(distDir);
+	const tarball = emitTarball(distDir);
 	console.log(`dist/: main.js, manifest.json, ${STROKES_GZ}, ${CEDICT_TXT}.gz ` +
-		`(${(raw.length / 1e6).toFixed(1)}MB -> ${(gz.length / 1e6).toFixed(1)}MB gz)`);
+		`(${(raw.length / 1e6).toFixed(1)}MB -> ${(gz.length / 1e6).toFixed(1)}MB gz), ${tarball}`);
+}
+
+function emitTarball(distDir) {
+	const manifest = JSON.parse(fs.readFileSync("manifest.json", "utf8"));
+	const tarball = `${manifest.id}-${manifest.version}.tar.gz`;
+	// drop tarballs from previous versions so dist/ only ever has the current one
+	for (const old of fs.readdirSync(distDir).filter((f) => f.endsWith(".tar.gz"))) {
+		fs.rmSync(path.join(distDir, old));
+	}
+	const files = ["main.js", "manifest.json", `${CEDICT_TXT}.gz`, STROKES_GZ];
+	cp.execFileSync("tar", [
+		"-czf", path.join(distDir, tarball),
+		"--owner=0", "--group=0", "--numeric-owner", "--sort=name",
+		"-C", distDir, ...files,
+	]);
+	return tarball;
 }
 
 const context = await esbuild.context({
