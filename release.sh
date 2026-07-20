@@ -75,18 +75,23 @@ if [ "${SKIP_TESTS:-}" != "1" ]; then
 fi
 
 # --- bump version files ------------------------------------------------------
-# from here until the release commit, revert the bump on any failure so the
-# working tree is left clean for a rerun
-revert_bump() {
-  echo "error: release failed, reverting version bump"
-  git checkout -- manifest.json package.json
-  if git ls-files --error-unmatch versions.json >/dev/null 2>&1; then
-    git checkout -- versions.json
-  else
-    rm -f versions.json
+# from here until the release commit, revert the bump on any failure (including
+# explicit exit 1, which ERR traps miss) so the working tree stays clean
+BUMPED=0
+cleanup() {
+  local status=$?
+  if [ "$status" -ne 0 ] && [ "$BUMPED" -eq 1 ]; then
+    echo "error: release failed, reverting version bump"
+    git checkout -- manifest.json package.json
+    if git ls-files --error-unmatch versions.json >/dev/null 2>&1; then
+      git checkout -- versions.json
+    else
+      rm -f versions.json
+    fi
   fi
 }
-trap revert_bump ERR
+trap cleanup EXIT
+BUMPED=1
 # manifest.json (tabs) and package.json (2 spaces) keep their own indentation;
 # versions.json maps plugin version -> minAppVersion (Obsidian convention)
 node - "$NEW_VERSION" <<'EOF'
@@ -121,8 +126,11 @@ PLUGIN_ID=$(node -p "require('./manifest.json').id")
 TARBALL="dist/${PLUGIN_ID}-${NEW_VERSION}.tar.gz"
 [ -f "$TARBALL" ] || { echo "error: build did not produce $TARBALL"; exit 1; }
 
+# list once into a variable: piping tar into grep -q makes tar fail with
+# SIGPIPE under pipefail when grep exits at the first match
+TARBALL_LISTING=$(tar -tzf "$TARBALL")
 for required in main.js manifest.json; do
-  tar -tzf "$TARBALL" | grep -qx "$required" || {
+  grep -qx "$required" <<< "$TARBALL_LISTING" || {
     echo "error: $TARBALL is missing $required at the archive root"
     exit 1
   }
@@ -137,7 +145,7 @@ TARBALL_VERSION=$(tar -xzOf "$TARBALL" manifest.json | node -p "JSON.parse(fs.re
 # --- commit, tag, push -------------------------------------------------------
 git add manifest.json package.json versions.json
 git commit -m "chore: release $NEW_VERSION"
-trap - ERR
+BUMPED=0
 git tag "$NEW_VERSION"
 git push origin HEAD "$NEW_VERSION"
 
