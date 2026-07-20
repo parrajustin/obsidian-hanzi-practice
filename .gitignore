@@ -8,6 +8,8 @@ lerna-debug.log*
 
 # JS files
 *.js
+!eslint.config.js
+!.prettierrc.js
 
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
