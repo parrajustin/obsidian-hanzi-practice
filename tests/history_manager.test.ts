@@ -166,6 +166,89 @@ describe('HistoryManager', () => {
     expect(nextEntry?.pinyin).toBe('hao4');
   });
 
+  it('averageScore is 0 for unreviewed entries and the mean otherwise', () => {
+    expect(HistoryManager.averageScore([])).toBe(0);
+    expect(
+      HistoryManager.averageScore([
+        {timestamp: 1, difficulty: 5},
+        {timestamp: 2, difficulty: 2},
+      ]),
+    ).toBe(3.5);
+  });
+
+  it('getMixUpEntry picks a different character within 0.5 average score', async () => {
+    const mockPracticeList = [
+      `好\thao3\tgood\t${HAO3_ID}`,
+      '汉\than4\tChinese',
+      '语\tyu3\tlanguage',
+    ].join('\n');
+
+    // 好 avg 4.5; 汉 avg 4.0 (within 0.5); 语 unreviewed avg 0 (excluded).
+    const mockHistory = `
+- [1718712000000] ${HAO3_ID} 好 (hao3): 4
+- [1718798400000] ${HAO3_ID} 好 (hao3): 5
+- [1718798400000] ${HAN_ID} 汉 (han4): 4
+`;
+
+    (FileUtil.fetchFile as jest.Mock)
+      .mockResolvedValueOnce(Ok(new TextEncoder().encode(mockPracticeList)))
+      .mockResolvedValueOnce(Ok(new TextEncoder().encode(mockHistory)));
+
+    const mixUp = await HistoryManager.getMixUpEntry(
+      mockApp,
+      'history.md',
+      'practice.md',
+      {id: HAO3_ID, character: '好', pinyin: 'hao3', english: 'good'},
+    );
+
+    expect(mixUp?.character).toBe('汉');
+  });
+
+  it('getMixUpEntry never returns another sense of the same character', async () => {
+    const mockPracticeList = [
+      `好\thao3\tgood\t${HAO3_ID}`,
+      `好\thao4\tto be fond of\t${HAO4_ID}`,
+    ].join('\n');
+    // Both senses are unreviewed (avg 0) — same character, so no candidate.
+    (FileUtil.fetchFile as jest.Mock)
+      .mockResolvedValueOnce(Ok(new TextEncoder().encode(mockPracticeList)))
+      .mockResolvedValueOnce(Ok(new TextEncoder().encode('')));
+
+    const mixUp = await HistoryManager.getMixUpEntry(
+      mockApp,
+      'history.md',
+      'practice.md',
+      {id: HAO3_ID, character: '好', pinyin: 'hao3', english: 'good'},
+    );
+
+    expect(mixUp).toBeNull();
+  });
+
+  it('getMixUpEntry returns null when no character is within 0.5', async () => {
+    const mockPracticeList = [
+      `好\thao3\tgood\t${HAO3_ID}`,
+      '汉\than4\tChinese',
+    ].join('\n');
+
+    // 好 avg 5; 汉 unreviewed avg 0 — outside the 0.5 window.
+    const mockHistory = `
+- [1718798400000] ${HAO3_ID} 好 (hao3): 5
+`;
+
+    (FileUtil.fetchFile as jest.Mock)
+      .mockResolvedValueOnce(Ok(new TextEncoder().encode(mockPracticeList)))
+      .mockResolvedValueOnce(Ok(new TextEncoder().encode(mockHistory)));
+
+    const mixUp = await HistoryManager.getMixUpEntry(
+      mockApp,
+      'history.md',
+      'practice.md',
+      {id: HAO3_ID, character: '好', pinyin: 'hao3', english: 'good'},
+    );
+
+    expect(mixUp).toBeNull();
+  });
+
   it('attributes legacy character-keyed reviews to current senses', async () => {
     const mockPracticeList = [
       `好\thao3\tgood\t${HAO3_ID}`,

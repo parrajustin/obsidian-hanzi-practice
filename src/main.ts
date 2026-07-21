@@ -20,7 +20,7 @@ export const HANZI_VIEW_TYPE = 'hanzi-practice-view';
 // the practice list) — never on the hot path of opening the practice view.
 export const CEDICT_FILE = 'cedict_1_0_ts_utf-8_mdbg_20240705_025126.txt.gz';
 
-// The medians-only stroke database (generated at build time from
+// The stroke database (medians + glyph outlines, generated at build time from
 // hanzi-writer-data), also shipped gzipped next to main.js. The reader keeps
 // the blob compressed-in-file / raw-in-memory and decodes one character at a
 // time, so loading it is cheap enough for the practice view's open path.

@@ -1,4 +1,4 @@
-import {ItemView, WorkspaceLeaf} from 'obsidian';
+import {ItemView, Notice, WorkspaceLeaf} from 'obsidian';
 import {HANZI_VIEW_TYPE} from '../main';
 
 import HanziPracticePlugin from '../main';
@@ -16,6 +16,8 @@ export class HanziPracticeView extends ItemView {
   private englishDef = '';
   private strokeMistakes = 0;
   private pinyinMistakes = 0;
+  /** Once Give Up is pressed, the attempt can only ever score 0. */
+  private gaveUp = false;
   private plugin: HanziPracticePlugin;
 
   constructor(leaf: WorkspaceLeaf, plugin: HanziPracticePlugin) {
@@ -32,21 +34,30 @@ export class HanziPracticeView extends ItemView {
   }
 
   async onOpen() {
-    const container = this.containerEl.children[1];
-    container.empty();
-
-    container.createEl('h2', {text: 'Practice Hanzi'});
-
     // Pick the next due character, then read its pinyin + definition straight
     // from the practice list (they were cached there when the character was
     // added). The heavy CEDICT dictionary is NOT loaded here.
-    this.targetPinyin = '';
-    this.englishDef = '';
     const nextEntry = await HistoryManager.getNextDueEntry(
       this.plugin.app,
       this.plugin.settings.historyFilePath,
       this.plugin.settings.practiceFilePath,
     );
+    await this.renderPractice(nextEntry);
+  }
+
+  /** (Re)build the whole practice UI for one entry (null = no bank yet). */
+  private async renderPractice(nextEntry: PracticeEntry | null) {
+    // Stop any give-up animation timers from a previous writer before its
+    // SVG is torn down.
+    this.writer?.destroy();
+    this.writer = null;
+    const container = this.containerEl.children[1];
+    container.empty();
+
+    container.createEl('h2', {text: 'Practice Hanzi'});
+
+    this.targetPinyin = '';
+    this.englishDef = '';
     this.currentEntry = nextEntry;
     if (nextEntry) {
       this.currentCharacter = nextEntry.character;
@@ -85,19 +96,22 @@ export class HanziPracticeView extends ItemView {
     drawContainer.style.height = '300px';
     drawContainer.style.border = '1px solid #ccc';
     drawContainer.style.margin = '20px 0';
+    // Keep native touch gestures (scroll, mobile back-swipe) away from the
+    // drawing surface; the quiz SVG blocks them too, this covers its border.
+    drawContainer.style.touchAction = 'none';
 
-    // Stroke medians come from the plugin-shipped database (lazy-loaded and
+    // Stroke data comes from the plugin-shipped database (lazy-loaded and
     // cached on the plugin; decoded per character) — no network, no CDN.
     this.writer = null;
     const strokeDataRes = await this.plugin.getStrokeData();
-    const medians = strokeDataRes.ok
+    const strokeData = strokeDataRes.ok
       ? strokeDataRes.val.get(this.currentCharacter)
       : null;
-    if (medians) {
+    if (strokeData) {
       this.writer = new HanziQuizWriter(
         drawContainer,
         this.currentCharacter,
-        medians,
+        strokeData,
         {
           width: 300,
           height: 300,
@@ -115,11 +129,17 @@ export class HanziPracticeView extends ItemView {
     const controls = container.createDiv();
     const btnGiveUp = controls.createEl('button', {text: 'Give Up'});
     btnGiveUp.onclick = () => this.handleGiveUp();
+    const btnMixUp = controls.createEl('button', {
+      text: 'Mix Up',
+      cls: 'hanzi-mix-up',
+    });
+    btnMixUp.onclick = () => void this.handleMixUp();
   }
 
   startQuiz() {
     this.strokeMistakes = 0;
     this.pinyinMistakes = 0;
+    this.gaveUp = false;
     this.writer?.quiz({
       onMistake: () => {
         this.strokeMistakes++;
@@ -131,9 +151,31 @@ export class HanziPracticeView extends ItemView {
   }
 
   handleGiveUp() {
-    // Show the full character skeleton, then animate it stroke by stroke.
+    // Show the full character, then animate it stroke by stroke. The user can
+    // still trace the guided strokes to finish, but the score is locked to 0.
+    this.gaveUp = true;
     this.writer?.showOutline();
     this.writer?.animateCharacter();
+  }
+
+  /**
+   * Swap to a different character in the same skill range: its average
+   * spaced-repetition score must be within 0.5 of the current entry's.
+   */
+  async handleMixUp() {
+    const alternate = this.currentEntry
+      ? await HistoryManager.getMixUpEntry(
+          this.plugin.app,
+          this.plugin.settings.historyFilePath,
+          this.plugin.settings.practiceFilePath,
+          this.currentEntry,
+        )
+      : null;
+    if (!alternate) {
+      new Notice('No other character with valid score range');
+      return;
+    }
+    await this.renderPractice(alternate);
   }
 
   async handleQuizComplete(summaryData: {
@@ -154,7 +196,9 @@ export class HanziPracticeView extends ItemView {
     if (this.pinyinMistakes > 1) maxDifficulty = 3;
     else if (this.pinyinMistakes === 1) maxDifficulty = 4;
 
-    const finalScore = Math.min(baseScore, maxDifficulty);
+    // Giving up means the character wasn't known — tracing the revealed
+    // strokes afterwards must not earn a passing grade.
+    const finalScore = this.gaveUp ? 0 : Math.min(baseScore, maxDifficulty);
 
     // Save to history, keyed by the entry's id (char+pinyin hash) so senses
     // of the same character track their own review schedules.

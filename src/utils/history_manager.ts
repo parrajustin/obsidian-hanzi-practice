@@ -138,6 +138,47 @@ export class HistoryManager {
     return reviews.sort((a, b) => a.timestamp - b.timestamp);
   }
 
+  /**
+   * Average review score of one entry (0 when it has never been reviewed —
+   * an unreviewed character counts as skill level 0).
+   */
+  static averageScore(reviews: Review[]): number {
+    if (reviews.length === 0) return 0;
+    return (
+      reviews.reduce((sum, review) => sum + review.difficulty, 0) /
+      reviews.length
+    );
+  }
+
+  /**
+   * "Mix up": a different character whose average spaced-repetition score is
+   * within 0.5 of `current`'s, picked at random. Other senses of the same
+   * character don't count as different. Null when no character qualifies.
+   */
+  static async getMixUpEntry(
+    app: App,
+    historyFilePath: string,
+    practiceFilePath: string,
+    current: PracticeEntry,
+  ): Promise<PracticeEntry | null> {
+    const allEntries = await this.loadPracticeEntries(app, practiceFilePath);
+    const entries = allEntries.filter(e => e.character.length === 1);
+    const history = await this.parseHistory(app, historyFilePath);
+
+    const currentAvg = this.averageScore(
+      this.reviewsForEntry(history, current),
+    );
+    const candidates = entries.filter(
+      entry =>
+        entry.character !== current.character &&
+        Math.abs(
+          this.averageScore(this.reviewsForEntry(history, entry)) - currentAvg,
+        ) <= 0.5,
+    );
+    if (candidates.length === 0) return null;
+    return candidates[Math.floor(Math.random() * candidates.length)];
+  }
+
   static async getNextDueEntry(
     app: App,
     historyFilePath: string,

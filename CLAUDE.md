@@ -1,9 +1,10 @@
 # Hanzi Practice — Obsidian Plugin
 
 Obsidian plugin for practicing Chinese characters (hanzi): draw strokes with the plugin's own
-minimal quiz writer (`src/writer/`, graded against a shipped medians-only stroke database —
-no hanzi-writer, no CDN), pick the correct pinyin/tone, get graded via a SuperMemo-2-style
-spaced-repetition engine, and track history in plain markdown files inside the vault.
+minimal quiz writer (`src/writer/`, graded against a shipped stroke database of medians +
+glyph outlines — no hanzi-writer, no CDN), pick the correct pinyin/tone, get graded via a
+SuperMemo-2-style spaced-repetition engine, and track history in plain markdown files inside
+the vault.
 
 ---
 
@@ -18,26 +19,40 @@ spaced-repetition engine, and track history in plain markdown files inside the v
   its **cached** pinyin + English def **from the practice list** (never CEDICT), renders the
   `Meaning:` line (`.hanzi-meaning`) + `PinyinSelector` (`.tone-selector`) + the quiz writer's
   draw box, grades on quiz complete, appends to history, then reopens for the next char. Gets
-  the char's medians from `plugin.getStrokeData()` (lazy, cached; `.hanzi-no-stroke-data`
-  message if the char isn't in the database).
+  the char's stroke data from `plugin.getStrokeData()` (lazy, cached; `.hanzi-no-stroke-data`
+  message if the char isn't in the database). Two controls under the draw box: **Give Up**
+  (reveals outline + animation; sets a `gaveUp` flag so the attempt scores **0** even if the
+  user then traces every stroke correctly) and **Mix Up** (`.hanzi-mix-up`;
+  `HistoryManager.getMixUpEntry` swaps in a random *different* character whose average SR
+  score is within 0.5 of the current one, else `Notice` "No other character with valid score
+  range").
 - `src/writer/` — the in-repo replacement for `hanzi-writer` (quiz-only). `quiz_writer.ts` is
-  `HanziQuizWriter`: renders an SVG, captures pointer strokes, grades each against the current
-  stroke's median, and after 3 misses on the same stroke highlights it as a hint
-  (`.hanzi-stroke-hint`, orange, static until the stroke passes). Correct strokes render as
-  `.hanzi-stroke-done`; `showOutline()`/`animateCharacter()` back the Give Up flow.
+  `HanziQuizWriter`: renders an SVG, captures pointer strokes (and swallows raw touch events
+  with non-passive `preventDefault` + `touch-action: none`, so drawing can't trigger the
+  mobile back-swipe/scroll), grades each against the current stroke's median, and after 3
+  misses on the same stroke highlights it as a hint (`.hanzi-stroke-hint`, orange, static
+  until the stroke passes). Completed strokes (`.hanzi-stroke-done`), hints, outlines and the
+  give-up animation all render the character's REAL glyph outline shapes (filled paths from
+  the stroke DB, drawn in a data-space-transformed `<g>`; the animation sweeps a fat median
+  stroke inside a `clipPath` of the outline — hanzi-writer's technique), falling back to a
+  round-capped median polyline for strokes with no outline;
+  `showOutline()`/`animateCharacter()` back the Give Up flow.
   `stroke_matcher.ts` is a simplified port of hanzi-writer's `strokeMatches` (same five checks
   + thresholds: avg distance ≤350 (×0.5 after stroke 0), start/end ≤250, direction cosine >0,
   normalized-Fréchet ≤0.4, length ratio ≥0.35) except avg distance is measured to median
   *segments* (accurate on simplified polylines). `geometry.ts` has the curve math.
-- `src/data/` — the medians-only stroke database. `stroke_codec.ts` defines the binary `HZS1`
-  format (per char: codepoint + strokes as int16 point pairs) with `encodeStrokeData` and the
-  random-access `StrokeDataReader` (one linear scan builds a codepoint→offset index; each
-  char's medians decode on demand — nothing large is materialized). `stroke_data.ts` loads +
-  gunzips `hanzi-strokes.bin.gz` from the plugin folder (same magic-byte pattern as CEDICT).
+- `src/data/` — the stroke database (medians + glyph outlines). `stroke_codec.ts` defines the
+  binary `HZS2` format (per char: codepoint + per stroke a length-prefixed record holding the
+  median points AND the glyph-outline path tokenized to M/L/Q/C/Z commands, all coordinates
+  zigzag-varint deltas from the previous point) with `encodeStrokeData` and the random-access
+  `StrokeDataReader` (one linear scan builds a codepoint→offset index; each char decodes on
+  demand — `get()` returns `{medians, outlines}` where outlines are ready-to-use SVG `d`
+  strings). `stroke_data.ts` loads + gunzips `hanzi-strokes.bin.gz` from the plugin folder
+  (same magic-byte pattern as CEDICT).
 - `scripts/gen_stroke_data.ts` — build-time generator: reads the `hanzi-writer-data`
-  **devDependency** (data source only — never shipped), keeps ONLY the medians, simplifies
-  polylines (Douglas-Peucker ε=10 of the 1024-unit box), encodes + gzips. 47MB of per-char
-  JSON → ~1.4MB shipped.
+  **devDependency** (data source only — never shipped), keeps each stroke's median
+  (simplified: Douglas-Peucker ε=10 of the 1024-unit box) + its glyph outline path, encodes +
+  gzips. 47MB of per-char JSON → ~9MB binary → ~6.6MB shipped.
 - `src/components/pinyin_selector.ts` — tone multiple-choice buttons: correct pinyin + 4
   distractors (from `ConstructOtherOptions`), Fisher-Yates shuffled. Wrong pick → `5px solid red`
   + increments a mistake counter; correct → green + `onComplete(mistakes)`.
@@ -99,10 +114,11 @@ runtime. This is the general pattern: **do the expensive lookup once, at write t
 the result into the data file that the hot path already reads.**
 
 ### The stroke-data flow — shipped, not fetched
-Stroke medians ship with the plugin as `hanzi-strokes.bin.gz` (~1.4MB, generated at build time
-from the `hanzi-writer-data` devDependency; see `scripts/gen_stroke_data.ts`). The practice
-view calls `plugin.getStrokeData()` (lazy, cached for the plugin lifetime), which gunzips the
-blob and hands it to `StrokeDataReader` — per-character decode on demand. **No network is ever
+Stroke data (medians for grading + glyph outlines for rendering) ships with the plugin as
+`hanzi-strokes.bin.gz` (~6.6MB, generated at build time from the `hanzi-writer-data`
+devDependency; see `scripts/gen_stroke_data.ts`). The practice view calls
+`plugin.getStrokeData()` (lazy, cached for the plugin lifetime), which gunzips the blob and
+hands it to `StrokeDataReader` — per-character decode on demand. **No network is ever
 needed**; the old hanzi-writer CDN dependency is gone.
 
 ### Data files (in the vault)
@@ -122,7 +138,8 @@ Modified SM-2 over day-numbers (`floor(now / 86_400_000)`). Failing (`<3`) or br
 due immediately; passing → review #1 `+1` day, #2 `+6`, #3+ `lastReviewDay + ceil(reviews.length
 * efactor)` where efactor accumulates the SM-2 modifier (min 1.3). Final grade =
 `min(strokeScore, pinyinCeiling)` — stroke mistakes give a 0–5 base, pinyin mistakes cap it
-(`>1`→3, `1`→4, `0`→5). Full spec in `hanzi-practice-architecture.md`.
+(`>1`→3, `1`→4, `0`→5) — **unless Give Up was pressed, which locks the grade to 0** no matter
+how the guided strokes are then traced. Full spec in `hanzi-practice-architecture.md`.
 
 ---
 
@@ -183,22 +200,17 @@ settings), asserts behavior at each step, and screenshots each step for pixel-di
 
 ### Run it (one command)
 ```bash
-npm run test:e2e          # build main.js + dist, bundle the runner, then run
+npm run test:e2e:docker   # build the image + run the E2E headless under Xvfb
 ```
-That expands to: `npm run build` → `npm run build:e2e` → `node tests/e2e_runner.js`. To run the
-pieces manually:
-```bash
-npm run build             # -> main.js + dist/ (incl. gzipped CEDICT)
-npm run build:e2e         # -> tests/e2e_runner.js
-node tests/e2e_runner.js  # runs against the current bundle
-```
+The host (non-docker) e2e npm scripts were removed — the docker run is the only supported
+way. It stages the build context, runs `npm run build` → `npm run build:e2e` →
+`node tests/e2e_runner.js` inside the container, and copies artifacts to `docker-artifacts/`.
 
 ### Regenerate goldens
 ```bash
-npm run test:e2e:goldens  # sets E2E_REGEN_GOLDENS=1 -> deletes tests/__goldens__/*.png,
-                          # then this run saves fresh ones. Eyeball dumps/ after.
+npm run test:e2e:docker:goldens  # E2E_REGEN_GOLDENS=1 -> regenerates docker/__golden__/*.png
 ```
-Then re-run `npm run test:e2e` and confirm every `[visual]` line reports `matches golden`.
+Then re-run `npm run test:e2e:docker` and confirm every `[visual]` line reports `matches golden`.
 
 ### What each run does automatically
 - **Kills any leftover test-Obsidian before AND after** (`reapTestObsidian` = `pkill -9 -f
@@ -258,9 +270,7 @@ Then re-run `npm run test:e2e` and confirm every `[visual]` line reports `matche
   plus a `FAILURE` dump on any thrown error — read these to see exactly where/why it stalled.
 - **`e2e-run.log`** (gitignored): full log incl. Obsidian stdout/stderr and `RESULT:`.
 
-### Running the E2E in Docker (fully headless — no host windows)
-The default `npm run test:e2e` launches real Obsidian windows on your desktop (`DISPLAY=:0`).
-To run it isolated & headless instead:
+### The Docker E2E environment (fully headless — no host windows)
 ```bash
 npm run test:e2e:docker            # build the image + run the E2E under Xvfb
 npm run test:e2e:docker:goldens    # same, but regenerate goldens inside the container
@@ -291,7 +301,6 @@ npm run test:e2e:docker:goldens    # same, but regenerate goldens inside the con
 ### Mobile-emulation E2E (documents why the plugin fails on phones)
 
 ```bash
-npm run test:e2e:mobile          # host (opens a window)
 npm run test:e2e:docker:mobile   # headless in the container
 ```
 

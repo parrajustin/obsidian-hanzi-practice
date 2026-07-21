@@ -3,22 +3,33 @@
  * view needs: a stroke-order QUIZ (the user draws each stroke with the
  * pointer, we grade it against the median), a hint highlight when the user
  * keeps missing the same stroke, and an outline/animation fallback for
- * "Give Up". Everything renders from the medians-only stroke database — no
- * glyph outlines, no network.
+ * "Give Up". Grading runs on the medians; completed strokes, hints, outlines
+ * and the give-up animation render the character's real glyph outlines
+ * (shipped in the stroke database) so strokes look like the original font —
+ * no network. A stroke missing its outline falls back to a round-capped
+ * median polyline.
  */
 import {Point} from './geometry';
 import {strokeMatches} from './stroke_matcher';
-import {CharMedians} from '../data/stroke_codec';
+import {CharStrokeData} from '../data/stroke_codec';
 import {WrapToResult} from 'standard-ts-lib/src/wrap_to_result';
 
 // All makemeahanzi/hanzi-writer characters share this bounding box (y-up).
 const BOUNDS_FROM = {x: 0, y: -124};
 const BOUNDS_TO = {x: 1024, y: 900};
 
-// Rendered brush width, in data-space units (scaled to pixels at draw time).
+// Rendered brush width for median-fallback strokes, in data-space units.
 const BRUSH_WIDTH = 50;
+// Brush width for the give-up animation's reveal stroke: fat enough that
+// sweeping it along the median uncovers the whole clipped glyph outline
+// (same value hanzi-writer uses).
+const ANIMATION_BRUSH_WIDTH = 200;
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
+
+// Unique-id source for per-stroke animation clip paths (ids are document
+// global, and several writers can exist across a session).
+let nextClipId = 0;
 
 export interface QuizWriterOptions {
   width: number;
@@ -44,9 +55,11 @@ export interface QuizCallbacks {
 export class HanziQuizWriter {
   readonly character: string;
   private medians: Point[][];
+  private outlines: string[];
   private opts: Required<QuizWriterOptions>;
 
   private svg: SVGSVGElement;
+  private defs: SVGDefsElement;
   private outlineGroup: SVGGElement;
   private completedGroup: SVGGElement;
   private hintGroup: SVGGElement;
@@ -70,11 +83,14 @@ export class HanziQuizWriter {
   constructor(
     container: HTMLElement,
     character: string,
-    medians: CharMedians,
+    strokeData: CharStrokeData,
     options: QuizWriterOptions,
   ) {
     this.character = character;
-    this.medians = medians.map(stroke => stroke.map(([x, y]) => ({x, y})));
+    this.medians = strokeData.medians.map(stroke =>
+      stroke.map(([x, y]) => ({x, y})),
+    );
+    this.outlines = strokeData.outlines;
     this.opts = {hintAfterMisses: 3, ...options};
 
     const {width, height, padding} = this.opts;
@@ -92,18 +108,43 @@ export class HanziQuizWriter {
     this.svg.setAttribute('width', String(width));
     this.svg.setAttribute('height', String(height));
     this.svg.classList.add('hanzi-quiz-svg');
+    // Drawing must never scroll the pane or trigger the mobile back-swipe
+    // gesture: disable native touch handling on the surface entirely.
     this.svg.style.touchAction = 'none';
+    this.svg.style.userSelect = 'none';
     container.appendChild(this.svg);
 
-    this.outlineGroup = this.makeGroup('hanzi-outline-group');
-    this.completedGroup = this.makeGroup('hanzi-completed-group');
-    this.hintGroup = this.makeGroup('hanzi-hint-group');
+    this.defs = document.createElementNS(SVG_NS, 'defs');
+    this.svg.appendChild(this.defs);
+
+    // Character-shaped groups live in DATA space (y-up); this transform maps
+    // them to screen so glyph outline paths can be used verbatim as `d`.
+    const dataTransform = `translate(${this.xOffset}, ${height - this.yOffset}) scale(${this.scale}, ${-this.scale})`;
+    this.outlineGroup = this.makeGroup('hanzi-outline-group', dataTransform);
+    this.completedGroup = this.makeGroup(
+      'hanzi-completed-group',
+      dataTransform,
+    );
+    this.hintGroup = this.makeGroup('hanzi-hint-group', dataTransform);
+    // User ink renders in raw svg-local pixels — no transform.
     this.inkGroup = this.makeGroup('hanzi-ink-group');
 
     this.svg.addEventListener('pointerdown', this.onPointerDown);
     this.svg.addEventListener('pointermove', this.onPointerMove);
     this.svg.addEventListener('pointerup', this.onPointerUp);
     this.svg.addEventListener('pointercancel', this.onPointerUp);
+    // Belt-and-braces for platforms where touch-action alone doesn't stop
+    // history-swipe/scroll gestures (e.g. Obsidian mobile's back gesture):
+    // swallow raw touch events before the app's gesture recognizers see them.
+    this.svg.addEventListener('touchstart', this.blockNativeTouch, {
+      passive: false,
+    });
+    this.svg.addEventListener('touchmove', this.blockNativeTouch, {
+      passive: false,
+    });
+    this.svg.addEventListener('touchend', this.blockNativeTouch, {
+      passive: false,
+    });
   }
 
   get strokeCount(): number {
@@ -125,12 +166,12 @@ export class HanziQuizWriter {
     this.inkGroup.replaceChildren();
   }
 
-  /** Draw every stroke's median in a light outline color (Give Up). */
+  /** Draw every stroke's glyph shape in a light outline color (Give Up). */
   showOutline() {
     this.outlineGroup.replaceChildren();
-    for (const median of this.medians) {
+    for (let i = 0; i < this.medians.length; i++) {
       this.outlineGroup.appendChild(
-        this.makeStrokePath(median, '#DDD', 'hanzi-stroke-outline'),
+        this.makeStrokeShape(i, '#DDD', 'hanzi-stroke-outline'),
       );
     }
   }
@@ -141,19 +182,31 @@ export class HanziQuizWriter {
     this.completedGroup.replaceChildren();
     this.medians.forEach((median, i) => {
       const timer = window.setTimeout(() => {
-        const pathEl = this.makeStrokePath(
+        // Reveal the real glyph shape by sweeping a fat median stroke inside
+        // a clip of the stroke's outline (hanzi-writer's animation technique).
+        const strokePath = this.makeMedianPath(
           median,
           '#555',
           'hanzi-stroke-animated',
+          this.outlines[i] ? ANIMATION_BRUSH_WIDTH : BRUSH_WIDTH,
         );
-        const len = pathEl.getTotalLength();
-        pathEl.style.strokeDasharray = `${len} ${len}`;
-        pathEl.style.strokeDashoffset = String(len);
-        pathEl.style.transition = `stroke-dashoffset ${perStrokeMs * 0.9}ms linear`;
-        this.completedGroup.appendChild(pathEl);
+        if (this.outlines[i]) {
+          const clip = document.createElementNS(SVG_NS, 'clipPath');
+          clip.id = `hanzi-anim-clip-${nextClipId++}`;
+          const clipShape = document.createElementNS(SVG_NS, 'path');
+          clipShape.setAttribute('d', this.outlines[i]);
+          clip.appendChild(clipShape);
+          this.defs.appendChild(clip);
+          strokePath.setAttribute('clip-path', `url(#${clip.id})`);
+        }
+        const len = strokePath.getTotalLength();
+        strokePath.style.strokeDasharray = `${len} ${len}`;
+        strokePath.style.strokeDashoffset = String(len);
+        strokePath.style.transition = `stroke-dashoffset ${perStrokeMs * 0.9}ms linear`;
+        this.completedGroup.appendChild(strokePath);
         // Force a layout so the transition actually runs.
-        pathEl.getBoundingClientRect();
-        pathEl.style.strokeDashoffset = '0';
+        strokePath.getBoundingClientRect();
+        strokePath.style.strokeDashoffset = '0';
       }, i * perStrokeMs);
       this.animationTimers.push(timer);
     });
@@ -171,9 +224,10 @@ export class HanziQuizWriter {
 
   // --- internals ----------------------------------------------------------
 
-  private makeGroup(cls: string): SVGGElement {
+  private makeGroup(cls: string, transform?: string): SVGGElement {
     const g = document.createElementNS(SVG_NS, 'g');
     g.classList.add(cls);
+    if (transform) g.setAttribute('transform', transform);
     this.svg.appendChild(g);
     return g;
   }
@@ -201,20 +255,39 @@ export class HanziQuizWriter {
       .join(' ');
   }
 
-  /** Round-capped polyline along a median, i.e. a brush-skeleton stroke. */
-  private makeStrokePath(
-    median: Point[],
+  /**
+   * The stroke's rendered shape, in data space: the real glyph outline
+   * (filled) when the database has one, else the round-capped median
+   * polyline fallback.
+   */
+  private makeStrokeShape(
+    strokeNum: number,
     color: string,
     cls: string,
   ): SVGPathElement {
+    const outline = this.outlines[strokeNum];
+    if (outline) {
+      const pathEl = document.createElementNS(SVG_NS, 'path');
+      pathEl.setAttribute('d', outline);
+      pathEl.setAttribute('fill', color);
+      pathEl.classList.add(cls);
+      return pathEl;
+    }
+    return this.makeMedianPath(this.medians[strokeNum], color, cls);
+  }
+
+  /** Round-capped polyline along a median, in data space. */
+  private makeMedianPath(
+    median: Point[],
+    color: string,
+    cls: string,
+    brushWidth = BRUSH_WIDTH,
+  ): SVGPathElement {
     const pathEl = document.createElementNS(SVG_NS, 'path');
-    pathEl.setAttribute(
-      'd',
-      this.pathString(median.map(p => this.dataToScreen(p))),
-    );
+    pathEl.setAttribute('d', this.pathString(median));
     pathEl.setAttribute('fill', 'none');
     pathEl.setAttribute('stroke', color);
-    pathEl.setAttribute('stroke-width', String(BRUSH_WIDTH * this.scale));
+    pathEl.setAttribute('stroke-width', String(brushWidth));
     pathEl.setAttribute('stroke-linecap', 'round');
     pathEl.setAttribute('stroke-linejoin', 'round');
     pathEl.classList.add(cls);
@@ -225,6 +298,10 @@ export class HanziQuizWriter {
     const rect = this.svg.getBoundingClientRect();
     return {x: evt.clientX - rect.left, y: evt.clientY - rect.top};
   }
+
+  private blockNativeTouch = (evt: TouchEvent) => {
+    evt.preventDefault();
+  };
 
   private onPointerDown = (evt: PointerEvent) => {
     if (!this.quizActive || this.isComplete) return;
@@ -291,11 +368,7 @@ export class HanziQuizWriter {
       this.hintGroup.replaceChildren();
       this.mistakesOnCurrentStroke = 0;
       this.completedGroup.appendChild(
-        this.makeStrokePath(
-          this.medians[strokeNum],
-          '#555',
-          'hanzi-stroke-done',
-        ),
+        this.makeStrokeShape(strokeNum, '#555', 'hanzi-stroke-done'),
       );
       this.currentStrokeIndex++;
       this.callbacks.onCorrectStroke?.({
@@ -324,11 +397,7 @@ export class HanziQuizWriter {
         this.hintGroup.childElementCount === 0
       ) {
         this.hintGroup.appendChild(
-          this.makeStrokePath(
-            this.medians[strokeNum],
-            '#FF9800',
-            'hanzi-stroke-hint',
-          ),
+          this.makeStrokeShape(strokeNum, '#FF9800', 'hanzi-stroke-hint'),
         );
       }
     }

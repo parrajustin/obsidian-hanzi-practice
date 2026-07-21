@@ -35,9 +35,10 @@ function svgEl(): SVGSVGElement {
 
 const harness = {
   /**
-   * Clear the page and mount a fresh writer for `char`, reading its medians
-   * from the (gunzipped, base64-encoded) HZS1 stroke database — the same blob
-   * the plugin ships. Returns basic facts for assertions.
+   * Clear the page and mount a fresh writer for `char`, reading its stroke
+   * data (medians + glyph outlines) from the (gunzipped, base64-encoded) HZS2
+   * stroke database — the same blob the plugin ships. Returns basic facts for
+   * assertions.
    */
   mount(strokeDataB64: string, char: string) {
     document.body.innerHTML = '';
@@ -65,9 +66,9 @@ const harness = {
     const reader = StrokeDataReader.create(
       decodeBase64(strokeDataB64),
     ).unsafeUnwrap();
-    const medians = reader.get(char);
-    if (!medians) throw new Error(`harness: no stroke data for ${char}`);
-    writer = new HanziQuizWriter(box, char, medians, {
+    const strokeData = reader.get(char);
+    if (!strokeData) throw new Error(`harness: no stroke data for ${char}`);
+    writer = new HanziQuizWriter(box, char, strokeData, {
       width: 300,
       height: 300,
       padding: 5,

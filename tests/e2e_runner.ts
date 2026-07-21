@@ -276,7 +276,7 @@ async function run() {
     );
     fs.writeFileSync(destGz, zlib.gzipSync(raw));
   }
-  // Ship the medians-only stroke database too (generated into dist/ by the
+  // Ship the stroke database (medians + outlines) too (generated into dist/ by the
   // production build). The quiz writer needs it — there is no CDN fallback.
   const strokesGz = 'hanzi-strokes.bin.gz';
   const distStrokes = path.join(__dirname, '..', 'dist', strokesGz);

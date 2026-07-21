@@ -2,11 +2,13 @@
  * Build-time generator for the shipped stroke database.
  *
  * Reads every per-character JSON in node_modules/hanzi-writer-data (a
- * devDependency — it never ships), keeps ONLY the medians, simplifies each
- * median polyline (Douglas-Peucker, epsilon 10 units of the 1024-unit em box —
- * ~1% of the character box, far below the ~250-unit grading thresholds; cuts
- * a third of the points), encodes with the HZS1 binary codec, and gzips the
- * result. Net: 47MB of per-char JSON -> ~1.4MB shipped.
+ * devDependency — it never ships) and keeps two things per stroke:
+ *  - the median, simplified (Douglas-Peucker, epsilon 10 units of the
+ *    1024-unit em box — ~1% of the character box, far below the ~250-unit
+ *    grading thresholds; cuts a third of the points), used for grading;
+ *  - the glyph outline path, tokenized to binary commands by the HZS2 codec,
+ *    used to render real calligraphic stroke shapes.
+ * The result is encoded with the HZS2 binary codec and gzipped.
  *
  * Invoked by esbuild.config.mjs (bundled to cjs and run with node):
  *   node gen_stroke_data.cjs <hanzi-writer-data-dir> <out.bin.gz>
@@ -14,7 +16,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as zlib from 'zlib';
-import {encodeStrokeData, CharMedians} from '../src/data/stroke_codec';
+import {
+  encodeStrokeData,
+  CharMedians,
+  CharStrokeData,
+} from '../src/data/stroke_codec';
 
 const SIMPLIFY_EPSILON = 10;
 
@@ -56,7 +62,7 @@ function main() {
     );
     process.exit(1);
   }
-  const entries = new Map<string, CharMedians>();
+  const entries = new Map<string, CharStrokeData>();
   let rawPoints = 0;
   let keptPoints = 0;
   for (const file of fs.readdirSync(dataDir)) {
@@ -74,7 +80,13 @@ function main() {
       keptPoints += simplified.length;
       return simplified;
     });
-    entries.set(char, medians);
+    // The glyph outline paths ship too — the quiz renders the real stroke
+    // shapes. Guard against a strokes/medians count mismatch in the source.
+    const strokes: string[] = Array.isArray(json.strokes) ? json.strokes : [];
+    const outlines = medians.map((_, i) =>
+      typeof strokes[i] === 'string' ? strokes[i] : '',
+    );
+    entries.set(char, {medians, outlines});
   }
   const encodedResult = encodeStrokeData(entries);
   if (encodedResult.err) {
