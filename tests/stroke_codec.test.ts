@@ -26,7 +26,9 @@ describe('Stroke data codec (HZS1)', () => {
   ];
 
   const roundTrip = (entries: Map<string, CharMedians>) =>
-    new StrokeDataReader(encodeStrokeData(entries));
+    StrokeDataReader.create(
+      encodeStrokeData(entries).unsafeUnwrap(),
+    ).unsafeUnwrap();
 
   it('round-trips characters exactly', () => {
     const reader = roundTrip(
@@ -56,9 +58,11 @@ describe('Stroke data codec (HZS1)', () => {
   });
 
   it('rejects blobs without the magic header', () => {
-    expect(
-      () => new StrokeDataReader(new Uint8Array([1, 2, 3, 4, 0, 0, 0, 0])),
-    ).toThrow(/magic/);
+    const result = StrokeDataReader.create(
+      new Uint8Array([1, 2, 3, 4, 0, 0, 0, 0]),
+    );
+    expect(result.err).toBe(true);
+    expect(result.err && result.val.message).toMatch(/magic/);
   });
 
   it('supports supplementary-plane characters (surrogate pairs)', () => {

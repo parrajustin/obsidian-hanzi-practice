@@ -13,7 +13,8 @@ describe('gunzip (web DecompressionStream)', () => {
   it('round-trips node-gzipped utf-8 data', async () => {
     const original = Buffer.from('好 hao3 good/appropriate 汉字\n'.repeat(500));
     const out = await gunzip(new Uint8Array(zlib.gzipSync(original)));
-    expect(Buffer.from(out).equals(original)).toBe(true);
+    expect(out.ok).toBe(true);
+    expect(Buffer.from(out.unsafeUnwrap()).equals(original)).toBe(true);
   });
 
   it('round-trips binary data (stroke-db-like)', async () => {
@@ -21,11 +22,13 @@ describe('gunzip (web DecompressionStream)', () => {
       Array.from({length: 4096}, (_, i) => (i * 37) % 256),
     );
     const out = await gunzip(new Uint8Array(zlib.gzipSync(original)));
-    expect(Buffer.from(out).equals(original)).toBe(true);
+    expect(out.ok).toBe(true);
+    expect(Buffer.from(out.unsafeUnwrap()).equals(original)).toBe(true);
   });
 
-  it('rejects on corrupt gzip input', async () => {
+  it('returns Err on corrupt gzip input', async () => {
     const bad = new Uint8Array([0x1f, 0x8b, 0x01, 0x02, 0x03, 0x04]);
-    await expect(gunzip(bad)).rejects.toThrow();
+    const out = await gunzip(bad);
+    expect(out.err).toBe(true);
   });
 });

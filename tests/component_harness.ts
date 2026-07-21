@@ -62,7 +62,9 @@ const harness = {
     box.style.border = '1px solid #ccc';
     stage.appendChild(box);
 
-    const reader = new StrokeDataReader(decodeBase64(strokeDataB64));
+    const reader = StrokeDataReader.create(
+      decodeBase64(strokeDataB64),
+    ).unsafeUnwrap();
     const medians = reader.get(char);
     if (!medians) throw new Error(`harness: no stroke data for ${char}`);
     writer = new HanziQuizWriter(box, char, medians, {

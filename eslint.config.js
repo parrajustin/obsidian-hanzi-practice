@@ -15,6 +15,7 @@ module.exports = defineConfig([
       'tests/component_harness.js',
       'dumps/',
       'dumps-component/',
+      'test_vault/',
       'docker-artifacts/',
       'squashfs-root/',
       'esbuild.config.mjs',

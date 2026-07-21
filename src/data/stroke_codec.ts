@@ -20,6 +20,12 @@
  * points per median stay small after simplification).
  */
 
+import {Ok, Err, Result} from 'standard-ts-lib/src/result';
+import {
+  StatusError,
+  InvalidArgumentError,
+} from 'standard-ts-lib/src/status_error';
+
 export type Point = {x: number; y: number};
 /** One character's medians: strokes -> points -> [x, y]. */
 export type CharMedians = number[][][];
@@ -28,7 +34,7 @@ const MAGIC = [0x48, 0x5a, 0x53, 0x31]; // "HZS1"
 
 export function encodeStrokeData(
   entries: Map<string, CharMedians>,
-): Uint8Array {
+): Result<Uint8Array, StatusError> {
   // First pass: size.
   let size = 4 + 4;
   for (const medians of entries.values()) {
@@ -43,15 +49,20 @@ export function encodeStrokeData(
   o += 4;
   for (const [char, medians] of entries) {
     const cp = char.codePointAt(0);
-    if (cp === undefined) throw new Error('empty character key');
+    if (cp === undefined)
+      return Err(InvalidArgumentError('empty character key'));
     if (medians.length > 255)
-      throw new Error(`${char}: too many strokes (${medians.length})`);
+      return Err(
+        InvalidArgumentError(`${char}: too many strokes (${medians.length})`),
+      );
     view.setUint32(o, cp, true);
     o += 4;
     buf[o++] = medians.length;
     for (const stroke of medians) {
       if (stroke.length > 255)
-        throw new Error(`${char}: too many points (${stroke.length})`);
+        return Err(
+          InvalidArgumentError(`${char}: too many points (${stroke.length})`),
+        );
       buf[o++] = stroke.length;
       for (const [x, y] of stroke) {
         view.setInt16(o, x, true);
@@ -61,7 +72,7 @@ export function encodeStrokeData(
       }
     }
   }
-  return buf;
+  return Ok(buf);
 }
 
 /**
@@ -75,13 +86,20 @@ export class StrokeDataReader {
   private bytes: Uint8Array;
   private index = new Map<number, number>();
 
-  constructor(bytes: Uint8Array) {
-    this.bytes = bytes;
-    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  /** Validates the HZS1 magic before constructing the reader. */
+  static create(bytes: Uint8Array): Result<StrokeDataReader, StatusError> {
     for (let i = 0; i < MAGIC.length; i++) {
       if (bytes[i] !== MAGIC[i])
-        throw new Error('stroke data: bad magic (not an HZS1 blob)');
+        return Err(
+          InvalidArgumentError('stroke data: bad magic (not an HZS1 blob)'),
+        );
     }
+    return Ok(new StrokeDataReader(bytes));
+  }
+
+  private constructor(bytes: Uint8Array) {
+    this.bytes = bytes;
+    this.view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const count = this.view.getUint32(4, true);
     let o = 8;
     for (let c = 0; c < count; c++) {

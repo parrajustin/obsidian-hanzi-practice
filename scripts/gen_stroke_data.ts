@@ -76,7 +76,14 @@ function main() {
     });
     entries.set(char, medians);
   }
-  const encoded = encodeStrokeData(entries);
+  const encodedResult = encodeStrokeData(entries);
+  if (encodedResult.err) {
+    console.error(
+      `stroke data: encode failed: ${encodedResult.val.toString()}`,
+    );
+    process.exit(1);
+  }
+  const encoded = encodedResult.safeUnwrap();
   const gz = zlib.gzipSync(encoded, {level: zlib.constants.Z_BEST_COMPRESSION});
   fs.mkdirSync(path.dirname(outPath), {recursive: true});
   fs.writeFileSync(outPath, gz);

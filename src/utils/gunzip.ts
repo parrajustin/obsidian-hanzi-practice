@@ -7,7 +7,13 @@
  * phones. `DecompressionStream` exists on every platform Obsidian runs on
  * (Chromium/Electron desktop, Android WebView, iOS 16.4+ WebKit).
  */
-export async function gunzip(data: Uint8Array): Promise<Uint8Array> {
+import {Ok, Result} from 'standard-ts-lib/src/result';
+import {StatusError} from 'standard-ts-lib/src/status_error';
+import {WrapPromise} from 'standard-ts-lib/src/wrap_promise';
+
+export async function gunzip(
+  data: Uint8Array,
+): Promise<Result<Uint8Array, StatusError>> {
   // Copy into a fresh Uint8Array: guarantees an ArrayBuffer-backed view
   // (streams reject SharedArrayBuffer-backed input, and the copy satisfies
   // TypeScript's BufferSource requirement).
@@ -17,15 +23,20 @@ export async function gunzip(data: Uint8Array): Promise<Uint8Array> {
   // Do NOT await the write before draining the readable — the write promise
   // only resolves once the decompressor's output is consumed, so awaiting it
   // first would deadlock. Errors (e.g. corrupt gzip) surface through
-  // reader.read() below; swallow the duplicate rejection here so it cannot
-  // become an unhandled rejection.
-  void writer.write(input).catch(() => {});
-  void writer.close().catch(() => {});
+  // reader.read() below; WrapPromise absorbs the duplicate rejection here so
+  // it cannot become an unhandled rejection.
+  void WrapPromise(writer.write(input), 'gunzip: write failed');
+  void WrapPromise(writer.close(), 'gunzip: close failed');
   const reader = stream.readable.getReader();
   const chunks: Uint8Array[] = [];
   let total = 0;
   for (;;) {
-    const {done, value} = await reader.read();
+    const readResult = await WrapPromise(
+      reader.read(),
+      'gunzip: failed to inflate (corrupt gzip data?)',
+    );
+    if (readResult.err) return readResult;
+    const {done, value} = readResult.safeUnwrap();
     if (done) break;
     chunks.push(value);
     total += value.length;
@@ -36,5 +47,5 @@ export async function gunzip(data: Uint8Array): Promise<Uint8Array> {
     out.set(chunk, offset);
     offset += chunk.length;
   }
-  return out;
+  return Ok(out);
 }

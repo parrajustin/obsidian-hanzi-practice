@@ -4,8 +4,9 @@ import {
   FileUtil,
   FileSystemType,
 } from 'standard-obsidian-lib/src/filesystem/file_util';
-import {Ok, Err, Result} from 'standard-ts-lib/src/result';
-import {StatusError, ErrorCode} from 'standard-ts-lib/src/status_error';
+import {Result} from 'standard-ts-lib/src/result';
+import {StatusError} from 'standard-ts-lib/src/status_error';
+import {InjectStatusMsg} from 'standard-ts-lib/src/status_util/inject_status_msg';
 import {StrokeDataReader} from './stroke_codec';
 
 /**
@@ -19,32 +20,28 @@ export async function loadStrokeData(
   app: App,
   dataPath: string,
 ): Promise<Result<StrokeDataReader, StatusError>> {
-  try {
-    const fileResult = await FileUtil.fetchFile(
-      app,
-      dataPath,
-      FileSystemType.RAW,
-    );
-    if (!fileResult.ok) {
-      return Err(
-        new StatusError(
-          ErrorCode.INTERNAL,
-          `Failed to load stroke data: ${fileResult.val.message}`,
-        ),
-      );
-    }
-    let bytes: Uint8Array = fileResult.val;
-    if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-      // Web-standard DecompressionStream (NOT Node zlib) — works on mobile.
-      bytes = await gunzip(bytes);
-    }
-    return Ok(new StrokeDataReader(bytes));
-  } catch (e) {
-    return Err(
-      new StatusError(
-        ErrorCode.INTERNAL,
-        `Error loading stroke data: ${e instanceof Error ? e.message : String(e)}`,
-      ),
+  const fileResult = await FileUtil.fetchFile(
+    app,
+    dataPath,
+    FileSystemType.RAW,
+  );
+  if (fileResult.err) {
+    return fileResult.mapErr(e =>
+      e.with(InjectStatusMsg('Failed to load stroke data')),
     );
   }
+  let bytes: Uint8Array = fileResult.safeUnwrap();
+  if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+    // Web-standard DecompressionStream (NOT Node zlib) — works on mobile.
+    const inflated = await gunzip(bytes);
+    if (inflated.err) {
+      return inflated.mapErr(e =>
+        e.with(InjectStatusMsg('Failed to load stroke data')),
+      );
+    }
+    bytes = inflated.safeUnwrap();
+  }
+  return StrokeDataReader.create(bytes).mapErr(e =>
+    e.with(InjectStatusMsg('Failed to load stroke data')),
+  );
 }

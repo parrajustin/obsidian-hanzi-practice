@@ -5,8 +5,9 @@ import {
   FileSystemType,
 } from 'standard-obsidian-lib/src/filesystem/file_util';
 import {Trie} from './trie';
-import {Ok, Err, Result} from 'standard-ts-lib/src/result';
-import {StatusError, ErrorCode} from 'standard-ts-lib/src/status_error';
+import {Ok, Result} from 'standard-ts-lib/src/result';
+import {StatusError} from 'standard-ts-lib/src/status_error';
+import {InjectStatusMsg} from 'standard-ts-lib/src/status_util/inject_status_msg';
 
 export interface CedictEntry {
   traditional: string;
@@ -23,47 +24,37 @@ export class CedictParser {
     app: App,
     dictPath: string,
   ): Promise<Result<boolean, StatusError>> {
-    // Determine if it's raw or obsidian vault path. For now, assume obsidian vault path
-    // Wait, the prompt says the file is in: /home/jrparra/git/obsidian-hanzi-practice/cedict_1_0_...
-    // If it's in the plugin root, we can fetch it via adapter (RAW).
-
-    try {
-      const fileResult = await FileUtil.fetchFile(
-        app,
-        dictPath,
-        FileSystemType.RAW,
-      );
-      if (!fileResult.ok) {
-        return Err(
-          new StatusError(
-            ErrorCode.INTERNAL,
-            `Failed to load dict: ${fileResult.val.message}`,
-          ),
-        );
-      }
-
-      // The dictionary ships gzipped (`.txt.gz`) to keep the plugin download
-      // small. Detect the gzip magic bytes (0x1f 0x8b) and inflate; otherwise
-      // treat the bytes as plain UTF-8 text. Inflation uses the web-standard
-      // DecompressionStream (NOT Node zlib) so this also works on mobile.
-      const bytes = fileResult.val;
-      let text: string;
-      if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-        text = new TextDecoder('utf-8').decode(await gunzip(bytes));
-      } else {
-        text = new TextDecoder('utf-8').decode(bytes);
-      }
-
-      this.parse(text);
-      return Ok(true);
-    } catch (e) {
-      return Err(
-        new StatusError(
-          ErrorCode.INTERNAL,
-          `Error loading dict: ${e instanceof Error ? e.message : String(e)}`,
-        ),
+    const fileResult = await FileUtil.fetchFile(
+      app,
+      dictPath,
+      FileSystemType.RAW,
+    );
+    if (fileResult.err) {
+      return fileResult.mapErr(e =>
+        e.with(InjectStatusMsg('Failed to load dict')),
       );
     }
+
+    // The dictionary ships gzipped (`.txt.gz`) to keep the plugin download
+    // small. Detect the gzip magic bytes (0x1f 0x8b) and inflate; otherwise
+    // treat the bytes as plain UTF-8 text. Inflation uses the web-standard
+    // DecompressionStream (NOT Node zlib) so this also works on mobile.
+    const bytes = fileResult.safeUnwrap();
+    let text: string;
+    if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
+      const inflated = await gunzip(bytes);
+      if (inflated.err) {
+        return inflated.mapErr(e =>
+          e.with(InjectStatusMsg('Failed to load dict')),
+        );
+      }
+      text = new TextDecoder('utf-8').decode(inflated.safeUnwrap());
+    } else {
+      text = new TextDecoder('utf-8').decode(bytes);
+    }
+
+    this.parse(text);
+    return Ok(true);
   }
 
   parse(text: string) {

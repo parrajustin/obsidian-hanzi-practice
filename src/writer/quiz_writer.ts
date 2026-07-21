@@ -9,6 +9,7 @@
 import {Point} from './geometry';
 import {strokeMatches} from './stroke_matcher';
 import {CharMedians} from '../data/stroke_codec';
+import {WrapToResult} from 'standard-ts-lib/src/wrap_to_result';
 
 // All makemeahanzi/hanzi-writer characters share this bounding box (y-up).
 const BOUNDS_FROM = {x: 0, y: -124};
@@ -228,12 +229,12 @@ export class HanziQuizWriter {
   private onPointerDown = (evt: PointerEvent) => {
     if (!this.quizActive || this.isComplete) return;
     evt.preventDefault();
-    // Synthetic events (tests) may carry a pointerId with no active pointer.
-    try {
-      this.svg.setPointerCapture(evt.pointerId);
-    } catch {
-      /* ignore */
-    }
+    // Synthetic events (tests) may carry a pointerId with no active pointer;
+    // a failed capture is harmless, so the Result is deliberately dropped.
+    WrapToResult(
+      () => this.svg.setPointerCapture(evt.pointerId),
+      'setPointerCapture failed',
+    );
     this.drawing = true;
     this.currentInkPoints = [this.svgLocalPoint(evt)];
     this.currentInkPath = document.createElementNS(SVG_NS, 'path');
