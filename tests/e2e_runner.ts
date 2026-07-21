@@ -6,6 +6,20 @@ import puppeteer, {type Page} from 'puppeteer-core';
 import {PNG} from 'pngjs';
 import pixelmatch from 'pixelmatch';
 
+// --- Mobile emulation ----------------------------------------------------
+// E2E_EMULATE_MOBILE=1 runs the whole flow with Obsidian's built-in mobile
+// emulation (app.emulateMobile(true), per
+// https://docs.obsidian.md/Plugins/Getting+started/Mobile+development), so the
+// plugin loads and renders under the mobile UI/layout. Goldens get a `mobile-`
+// prefix so they never collide with the desktop ones.
+//
+// Note: emulateMobile also faithfully simulates Capacitor's missing Node.js —
+// Obsidian's wrapRequire rejects plugin require()s of Node builtins with
+// `[<plugin-id>] Attempting to load NodeJS package: "zlib"`, so a bundle that
+// depends on Node APIs fails under this mode just like on a real device.
+const EMULATE_MOBILE = process.env.E2E_EMULATE_MOBILE === '1';
+const GOLDEN_PREFIX = EMULATE_MOBILE ? 'mobile-' : '';
+
 const LOG_PATH = path.join(__dirname, '..', 'e2e-run.log');
 try {
   fs.writeFileSync(LOG_PATH, '');
@@ -86,7 +100,8 @@ async function clickTrustAuthor(page: any): Promise<boolean> {
   return false;
 }
 
-async function takeAndCompareScreenshot(page: Page, name: string) {
+async function takeAndCompareScreenshot(page: Page, rawName: string) {
+  const name = GOLDEN_PREFIX + rawName;
   await dump(page, name);
   const screenshotPath = path.join(__dirname, '..', `${name}.png`);
   await page.screenshot({path: screenshotPath});
@@ -190,11 +205,13 @@ function regenGoldensIfRequested() {
   try {
     for (const f of fs.readdirSync(goldenDir)) {
       // Scoped: never touch the component runner's `component-*.png`
-      // goldens — each runner regenerates only its own prefix.
-      if (f.endsWith('.png') && !f.startsWith('component-')) {
-        fs.rmSync(path.join(goldenDir, f));
-        removed++;
-      }
+      // goldens — each runner regenerates only its own prefix. The mobile and
+      // desktop E2E variants likewise only regenerate their own goldens.
+      if (!f.endsWith('.png') || f.startsWith('component-')) continue;
+      const isMobileGolden = f.startsWith('mobile-');
+      if (isMobileGolden !== EMULATE_MOBILE) continue;
+      fs.rmSync(path.join(goldenDir, f));
+      removed++;
     }
   } catch (e) {
     /* dir may not exist yet */
@@ -354,14 +371,13 @@ async function run() {
     );
   }
 
-  let page: any = null;
-  try {
-    // Obsidian spawns several renderer targets (the vault window, plus
-    // possibly a starter/vault-picker window). Poll until we find the one
-    // that actually has the loaded workspace (window.app.workspace), rather
-    // than guessing by URL — the picker and the vault both use app.html-ish
-    // URLs and attaching to the wrong one is what stalled STEP 1.
-    const deadline = Date.now() + 60000;
+  // Obsidian spawns several renderer targets (the vault window, plus
+  // possibly a starter/vault-picker window). Poll until we find the one
+  // that actually has the loaded workspace (window.app.workspace), rather
+  // than guessing by URL — the picker and the vault both use app.html-ish
+  // URLs and attaching to the wrong one is what stalled STEP 1.
+  const findWorkspacePage = async (timeoutMs: number): Promise<any> => {
+    const deadline = Date.now() + timeoutMs;
     let lastTargetsDump = '';
     while (Date.now() < deadline) {
       const targets = browser.targets();
@@ -386,24 +402,152 @@ async function run() {
         } catch (e) {
           /* execution context may be tearing down */
         }
-        if (ready) {
-          page = p;
-          break;
-        }
+        if (ready) return p;
       }
-      if (page) break;
       await delay(2000);
     }
+    log('Available targets:\n  ' + lastTargetsDump);
+    return null;
+  };
+  const attachPageLogs = (p: any) => {
+    p.on('console', async (msg: any) => {
+      let text = msg.text();
+      // Error objects print as an opaque "JSHandle@error" — deserialize them
+      // so the actual message/stack lands in the log.
+      if (text.includes('JSHandle@')) {
+        try {
+          const parts = await Promise.all(
+            msg
+              .args()
+              .map((a: any) =>
+                a.evaluate((v: any) =>
+                  v instanceof Error ? v.stack || v.message : String(v),
+                ),
+              ),
+          );
+          text = parts.join(' ');
+        } catch (e) {
+          /* page may have navigated away */
+        }
+      }
+      log('PAGE LOG:', text);
+    });
+    p.on('pageerror', (err: any) => log('PAGE ERROR:', err.toString()));
+  };
+
+  let page: any = null;
+  try {
+    page = await findWorkspacePage(60000);
     if (!page) {
-      log('Available targets:\n  ' + lastTargetsDump);
       throw new Error(
         'Could not find a loaded Obsidian workspace page (layoutReady never became true)',
       );
     }
-    page.on('console', (msg: any) => log('PAGE LOG:', msg.text()));
-    page.on('pageerror', (err: any) => log('PAGE ERROR:', err.toString()));
+    attachPageLogs(page);
 
     log('Connected to loaded Obsidian workspace.');
+
+    if (EMULATE_MOBILE) {
+      // Shrink the window to a phone-ish size first so Obsidian's emulation
+      // picks the phone layout (is-phone) rather than tablet. Best-effort —
+      // if the CDP Browser domain isn't available we still emulate at the
+      // current window size (which Obsidian then treats as a tablet).
+      log('MOBILE: resizing window to phone form factor (best-effort)...');
+      try {
+        const session = await page.target().createCDPSession();
+        const {windowId} = await session.send('Browser.getWindowForTarget');
+        await session.send('Browser.setWindowBounds', {
+          windowId,
+          bounds: {width: 420, height: 860},
+        });
+        await session.detach();
+      } catch (e) {
+        log('WARN could not resize window via CDP:', (e as Error).message);
+      }
+      await delay(1000);
+      log('MOBILE: enabling Obsidian mobile emulation (app.emulateMobile)...');
+      await page
+        .evaluate(() => {
+          (window as any).app.emulateMobile(true);
+        })
+        .catch((e: Error) => log('MOBILE: emulateMobile call:', e.message));
+      // emulateMobile may apply live, or persist a flag that only takes
+      // effect after a window reload (which it may or may not trigger
+      // itself). Poll for the mobile UI; if the execution context dies the
+      // window reloaded — reattach. If nothing happened after ~10s, force a
+      // reload once so a persisted flag gets picked up.
+      let mobileOn = false;
+      let forcedReload = false;
+      const mobDeadline = Date.now() + 45000;
+      while (Date.now() < mobDeadline) {
+        let state: any = null;
+        try {
+          state = await page.evaluate(() => {
+            const w = window as any;
+            return {
+              isMobile: !!(w.app && w.app.isMobile),
+              layoutReady: !!(
+                w.app &&
+                w.app.workspace &&
+                w.app.workspace.layoutReady
+              ),
+              classes: document.body.className
+                .split(/\s+/)
+                .filter(c => /mobile|phone|tablet/i.test(c)),
+            };
+          });
+        } catch (e) {
+          log('MOBILE: window reloaded; re-acquiring workspace page...');
+          const p = await findWorkspacePage(30000);
+          if (p && p !== page) {
+            page = p;
+            attachPageLogs(page);
+          }
+          continue;
+        }
+        if (state && state.isMobile && state.layoutReady) {
+          log('MOBILE: emulation active:', JSON.stringify(state));
+          mobileOn = true;
+          break;
+        }
+        if (!forcedReload && Date.now() > mobDeadline - 35000) {
+          forcedReload = true;
+          log('MOBILE: no live effect — forcing a window reload...');
+          await page.evaluate(() => window.location.reload()).catch(() => {});
+          await delay(3000);
+          continue;
+        }
+        await delay(1000);
+      }
+      if (!mobileOn) {
+        const diag = await page
+          .evaluate(() => {
+            const w = window as any;
+            const lsKeys: string[] = [];
+            for (let i = 0; i < localStorage.length; i++) {
+              const k = localStorage.key(i) || '';
+              if (/mobile|emulate/i.test(k)) {
+                lsKeys.push(`${k}=${localStorage.getItem(k)}`);
+              }
+            }
+            return {
+              typeofEmulate: typeof (w.app && w.app.emulateMobile),
+              isMobile: w.app && w.app.isMobile,
+              appId: w.app && w.app.appId,
+              lsKeys,
+              bodyClasses: document.body.className,
+            };
+          })
+          .catch(() => null);
+        log('MOBILE: diagnostics:', JSON.stringify(diag));
+        await dump(page, 'MOBILE-emulation-failed');
+        throw new Error(
+          'app.emulateMobile(true) did not activate mobile mode (see diagnostics above)',
+        );
+      }
+      await delay(1500);
+      await dump(page, 'step0-mobile-emulated');
+    }
 
     // STEP 1: Create vault (done via startup)
     log('STEP 1: Vault created and loaded.');
@@ -473,8 +617,9 @@ async function run() {
     await delay(2000);
     await takeAndCompareScreenshot(page, 'step3-plugin-enabled');
 
-    // Close settings
+    // Close settings (Escape on desktop; the mobile UI uses a close button)
     await page.keyboard.press('Escape');
+    await page.click('.modal-close-button').catch(() => {});
     await delay(1000);
 
     // STEP 4: Add multiple characters to the plugin
@@ -577,6 +722,7 @@ async function run() {
     }
     await takeAndCompareScreenshot(page, 'step4-duplicate-error');
     await page.keyboard.press('Escape');
+    await page.click('.modal-close-button').catch(() => {});
     await delay(1000);
 
     // STEP 5: Check in the MD the character is there

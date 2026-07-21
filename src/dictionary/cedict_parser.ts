@@ -1,5 +1,5 @@
 import {App} from 'obsidian';
-import * as zlib from 'zlib';
+import {gunzip} from '../utils/gunzip';
 import {
   FileUtil,
   FileSystemType,
@@ -44,11 +44,12 @@ export class CedictParser {
 
       // The dictionary ships gzipped (`.txt.gz`) to keep the plugin download
       // small. Detect the gzip magic bytes (0x1f 0x8b) and inflate; otherwise
-      // treat the bytes as plain UTF-8 text.
+      // treat the bytes as plain UTF-8 text. Inflation uses the web-standard
+      // DecompressionStream (NOT Node zlib) so this also works on mobile.
       const bytes = fileResult.val;
       let text: string;
       if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-        text = zlib.gunzipSync(Buffer.from(bytes)).toString('utf-8');
+        text = new TextDecoder('utf-8').decode(await gunzip(bytes));
       } else {
         text = new TextDecoder('utf-8').decode(bytes);
       }

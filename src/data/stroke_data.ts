@@ -1,5 +1,5 @@
 import {App} from 'obsidian';
-import * as zlib from 'zlib';
+import {gunzip} from '../utils/gunzip';
 import {
   FileUtil,
   FileSystemType,
@@ -35,7 +35,8 @@ export async function loadStrokeData(
     }
     let bytes: Uint8Array = fileResult.val;
     if (bytes.length >= 2 && bytes[0] === 0x1f && bytes[1] === 0x8b) {
-      bytes = zlib.gunzipSync(Buffer.from(bytes));
+      // Web-standard DecompressionStream (NOT Node zlib) — works on mobile.
+      bytes = await gunzip(bytes);
     }
     return Ok(new StrokeDataReader(bytes));
   } catch (e) {

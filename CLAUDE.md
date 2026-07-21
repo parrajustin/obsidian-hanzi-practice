@@ -260,6 +260,39 @@ npm run test:e2e:docker:goldens    # same, but regenerate goldens inside the con
 - Image is ~2.1 GB (Electron libs + CJK fonts + extracted app). First build is slow (base image +
   apt + `pnpm install`); layers cache so re-runs are fast.
 
+### Mobile-emulation E2E (documents why the plugin fails on phones)
+
+```bash
+npm run test:e2e:mobile          # host (opens a window)
+npm run test:e2e:docker:mobile   # headless in the container
+```
+
+- `E2E_EMULATE_MOBILE=1` makes the runner call `app.emulateMobile(true)` (per
+  https://docs.obsidian.md/Plugins/Getting+started/Mobile+development) right after connecting.
+  **`emulateMobile` persists a flag and RELOADS the window** — checking `app.isMobile`
+  immediately after the call reads `false`; the runner polls, re-attaches to the reloaded
+  page (`findWorkspacePage`), and forces one reload itself if nothing happens. After that the
+  body has `emulate-mobile is-mobile` (+`is-tablet` at the container's 1024×800 — Electron's
+  CDP lacks `Browser.setWindowBounds`, so the phone-size resize is best-effort only).
+- Goldens get a `mobile-` prefix; `E2E_REGEN_GOLDENS=1` is prefix-scoped (desktop regen never
+  deletes `mobile-*`/`component-*` and vice versa).
+- **Obsidian's emulation also blocks Node builtins for plugins** — a faithful Capacitor
+  simulation: each plugin `require('zlib')` logs
+  `Error: [hanzi-practice] Attempting to load NodeJS package: "zlib"` and the plugin gets a
+  dead module binding instead of Node's zlib.
+- **STATUS (2026-07): mobile E2E PASSES end-to-end** (`RESULT: PASS` in the container, both
+  desktop and mobile modes). It used to fail at STEP 5: the bundle's top-level
+  `require("zlib")` (esbuild keeps Node builtins `external`) was rejected under mobile →
+  `getDictionary()` errored → the add-modal wrote EMPTY cached pinyin/def (`好\t\t`). That
+  was the Android bug. **The fix**: `src/utils/gunzip.ts` inflates with the web-standard
+  `DecompressionStream('gzip')` (no Node zlib/Buffer anywhere in the shipped bundle — verify
+  with `grep -c 'require("zlib")' main.js` → 0); `cedict_parser.ts` and `stroke_data.ts` use
+  it. Gotcha inside the helper: do NOT await `writer.write()` before draining the readable
+  (the write promise only resolves once output is consumed — awaiting first deadlocks), and
+  `.catch(() => {})` the write/close promises so a corrupt-gzip error (which also surfaces
+  via `reader.read()`) can't double-fire as an unhandled rejection. Unit-tested in
+  `tests/gunzip.test.ts` (`@jest-environment node` — jsdom lacks DecompressionStream).
+
 ---
 
 ## Component golden test — the quiz writer in isolation
@@ -374,6 +407,11 @@ the clips are small. Validate with `grep RESULT: component-run.log` → `RESULT:
   command line. Filter out `node`/`-eo`/`-e` lines when counting real Obsidian processes.
 - Shell is fish; primary dir `/home/jrparra/git/obsidian-hanzi-practice`. The extracted AppImage
   lives at `squashfs-root/obsidian` (gitignored), profile at `/tmp/obsidian-test-profile`.
+- **Background vs foreground Bash calls can see DIFFERENT /tmp overlay views** (sandboxing).
+  A log file written by a backgrounded command may be invisible (or stale) to later foreground
+  `grep`/`ls` calls on the same path. Write run logs into the repo tree (e.g.
+  `docker-artifacts/`) instead of /tmp or the scratchpad when a different shell needs to read
+  them.
 - **The Obsidian AppImage is NOT committed** (118MB > GitHub's 100MB blob limit — it was
   filter-branched out of history). `scripts/fetch_obsidian.sh` downloads the pinned version
   from Obsidian's official releases if missing (`--extract` also produces `squashfs-root/`

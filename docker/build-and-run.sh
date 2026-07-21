@@ -60,6 +60,7 @@ mkdir -p "$OUT_DIR" "$GOLDEN_DIR"
 docker run --rm \
   --shm-size=512m \
   -e E2E_REGEN_GOLDENS="${E2E_REGEN_GOLDENS:-}" \
+  -e E2E_EMULATE_MOBILE="${E2E_EMULATE_MOBILE:-}" \
   -v "$OUT_DIR:/out" \
   -v "$GOLDEN_DIR:$CONTAINER_GOLDEN_DIR" \
   "$IMAGE" "$@"
