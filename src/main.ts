@@ -6,6 +6,7 @@ import {
 } from './settings';
 import {HanziPracticeView} from './views/hanzi_view';
 import {AddCharacterModal} from './commands/add_character_modal';
+import {EditBankModal} from './commands/edit_bank_modal';
 import {CedictParser} from './dictionary/cedict_parser';
 import {StrokeDataReader} from './data/stroke_codec';
 import {loadStrokeData} from './data/stroke_data';
@@ -86,6 +87,14 @@ export default class HanziPracticePlugin extends Plugin {
       name: 'Add Hanzi Character to Practice',
       callback: () => {
         new AddCharacterModal(this.app, this).open();
+      },
+    });
+
+    this.addCommand({
+      id: 'edit-hanzi-bank',
+      name: 'Edit Hanzi Practice Bank',
+      callback: () => {
+        new EditBankModal(this.app, this).open();
       },
     });
   }

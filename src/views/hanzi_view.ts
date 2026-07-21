@@ -5,9 +5,12 @@ import HanziPracticePlugin from '../main';
 import {HistoryManager} from '../utils/history_manager';
 import {PinyinSelector} from '../components/pinyin_selector';
 import {HanziQuizWriter} from '../writer/quiz_writer';
+import {computeEntryId, PracticeEntry} from '../utils/practice_list';
 
 export class HanziPracticeView extends ItemView {
   private writer: HanziQuizWriter | null = null;
+  /** The practice item (sense) being quizzed; history is keyed by its id. */
+  private currentEntry: PracticeEntry | null = null;
   private currentCharacter = '汉';
   private targetPinyin = '';
   private englishDef = '';
@@ -39,22 +42,16 @@ export class HanziPracticeView extends ItemView {
     // added). The heavy CEDICT dictionary is NOT loaded here.
     this.targetPinyin = '';
     this.englishDef = '';
-    const nextChar = await HistoryManager.getNextDueCharacter(
+    const nextEntry = await HistoryManager.getNextDueEntry(
       this.plugin.app,
       this.plugin.settings.historyFilePath,
       this.plugin.settings.practiceFilePath,
     );
-    if (nextChar) {
-      this.currentCharacter = nextChar;
-      const entry = await HistoryManager.getPracticeEntry(
-        this.plugin.app,
-        this.plugin.settings.practiceFilePath,
-        nextChar,
-      );
-      if (entry) {
-        this.targetPinyin = entry.pinyin;
-        this.englishDef = entry.english;
-      }
+    this.currentEntry = nextEntry;
+    if (nextEntry) {
+      this.currentCharacter = nextEntry.character;
+      this.targetPinyin = nextEntry.pinyin;
+      this.englishDef = nextEntry.english;
     }
 
     if (this.englishDef) {
@@ -159,11 +156,18 @@ export class HanziPracticeView extends ItemView {
 
     const finalScore = Math.min(baseScore, maxDifficulty);
 
-    // Save to history
+    // Save to history, keyed by the entry's id (char+pinyin hash) so senses
+    // of the same character track their own review schedules.
+    const entry: PracticeEntry = this.currentEntry ?? {
+      id: computeEntryId(this.currentCharacter, this.targetPinyin),
+      character: this.currentCharacter,
+      pinyin: this.targetPinyin,
+      english: this.englishDef,
+    };
     await HistoryManager.appendResult(
       this.plugin.app,
       this.plugin.settings.historyFilePath,
-      this.currentCharacter,
+      entry,
       finalScore,
     );
 

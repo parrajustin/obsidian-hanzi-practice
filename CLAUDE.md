@@ -9,8 +9,8 @@ spaced-repetition engine, and track history in plain markdown files inside the v
 
 ## Repo layout
 
-- `src/main.ts` — plugin entry. Registers the `HanziPracticeView` + two commands
-  (`open-hanzi-practice`, `add-hanzi-character`). `activateView()` opens the practice tab in the
+- `src/main.ts` — plugin entry. Registers the `HanziPracticeView` + three commands
+  (`open-hanzi-practice`, `add-hanzi-character`, `edit-hanzi-bank`). `activateView()` opens the practice tab in the
   **center** pane via `workspace.getLeaf('tab')` (reusing an existing practice leaf if present).
   `getDictionary()` lazily loads + **caches** the parsed CEDICT for the plugin lifetime; only the
   add-character modal uses it. `CEDICT_FILE` names the shipped gzip.
@@ -45,9 +45,14 @@ spaced-repetition engine, and track history in plain markdown files inside the v
   senses via `plugin.getDictionary()` + `lookupDefinitions` and renders them as clickable
   `.hanzi-def-option` buttons (pretty-tone pinyin + English; e.g. 好 → hǎo/hào). The **Add
   button stays disabled/greyed until a sense is selected**; a stale-lookup guard (`lookupSeq`)
-  drops out-of-date results. On Add: dup-check against the parsed list, then **cache the
-  SELECTED sense's pinyin+def onto the practice line**. Duplicate → inline `.hanzi-add-error`
-  (red) + `Notice`, modal stays open; typing clears the error + resets the selection.
+  drops out-of-date results. On Add: dup-check **by entry id (char+pinyin)** — adding a second
+  sense of the same char is allowed, re-adding the same sense is not — then **cache the
+  SELECTED sense's pinyin+def+id onto the practice line**. Duplicate → inline
+  `.hanzi-add-error` (red) + `Notice`, modal stays open; typing clears the error + selection.
+- `src/commands/edit_bank_modal.ts` — `edit-hanzi-bank` command's modal: lists every practice
+  entry (`.hanzi-bank-row`: char, pretty pinyin, English) with a `.hanzi-bank-remove` button.
+  Removal filters by entry id and rewrites the words file via `formatPracticeEntry` (also
+  migrating old id-less lines). History lines are never touched (they're a log).
 - `src/dictionary/definition_lookup.ts` — `lookupDefinitions(dict, input)`: merges
   simplified+traditional trie hits, dedupes identical payloads, JSON-parses each sense
   (via `WrapToResult`, skipping malformed ones). Unit-tested in `tests/definition_lookup.test.ts`.
@@ -58,10 +63,14 @@ spaced-repetition engine, and track history in plain markdown files inside the v
 - `src/utils/prettify_pinyin.ts` — `prettifyPinyin` (numeric→accented, `shi4`→`shì`) and
   `ConstructOtherOptions` (distractor pinyin; expects **numeric** pinyin like `hao3`).
 - `src/utils/practice_list.ts` — `parsePracticeList` / `formatPracticeEntry` for the words-file
-  format. Backward-compatible with old plain one-char-per-line entries.
-- `src/utils/history_manager.ts` — reads/writes `hanzi-practice-history.md`, picks the next due
-  char (`getNextDueCharacter`), and reads cached pinyin+def (`getPracticeEntry` /
-  `loadPracticeEntries`).
+  format, plus `computeEntryId(char, pinyin)`: FNV-1a 32-bit → 8 hex chars (pure string math,
+  no Node `crypto` — mobile-safe). Each (char, pinyin) sense is its own `PracticeEntry` with
+  its own `id`. Backward-compatible: 3-field lines derive the id, plain one-char lines parse
+  with empty pinyin/def.
+- `src/utils/history_manager.ts` — reads/writes `hanzi-practice-history.md` **keyed by entry
+  id** (`parseHistory` also accepts legacy char-keyed lines; `reviewsForEntry` merges id-keyed
+  + legacy reviews oldest-first), picks the next due entry (`getNextDueEntry` — senses of the
+  same char schedule independently), and loads entries (`loadPracticeEntries`).
 - `src/spaced_repetition.ts` — SR scheduling (see below).
 - `src/settings.ts` — Zod-schema settings (`historyFilePath`, `practiceFilePath`) + settings tab.
 - Depends on sibling repos `../standard-obsidian-lib` and `../standard-ts-lib` (`file:` deps).
@@ -80,7 +89,7 @@ Add character ──▶ typing triggers plugin.getDictionary()  (lazy, cached, g
                     └─▶ list ALL senses (pretty pinyin + English); user selects one
                         └─▶ Add enables ─▶ write "char⇥pinyin⇥english" into hanzi-practice-words.md
 
-Practice view ──▶ getNextDueCharacter() + getPracticeEntry()   (read words file only)
+Practice view ──▶ getNextDueEntry()   (reads words + history files only; per-sense SR)
                     └─▶ render Meaning + tone selector from the CACHED fields
 ```
 
@@ -97,11 +106,16 @@ blob and hands it to `StrokeDataReader` — per-character decode on demand. **No
 needed**; the old hanzi-writer CDN dependency is gone.
 
 ### Data files (in the vault)
-- `hanzi-practice-words.md` — one entry per line, **TAB-separated**: `char⇥pinyin⇥english`
-  (e.g. `好\thao3\tgood/appropriate; …`). `pinyin` is numeric CEDICT form. Plain one-char lines
-  (no tabs) are still accepted (pinyin/def empty). Tabs are used as the separator because CEDICT
-  definitions contain `/`, `|`, `;`, `(`, `)`, `:` but never tabs.
-- `hanzi-practice-history.md` — attempt log, lines like `- [<epoch-ms>] 好: 5`.
+- `hanzi-practice-words.md` — one entry per line, **TAB-separated**:
+  `char⇥pinyin⇥english⇥id` (e.g. `好\thao3\tgood/appropriate; …\t<8-hex id>`). `pinyin` is
+  numeric CEDICT form; `id` = `computeEntryId(char, pinyin)`. A char can appear on several
+  lines (one per sense). Old 3-field and plain one-char lines are still accepted (id derived,
+  pinyin/def empty). Tabs are used as the separator because CEDICT definitions contain `/`,
+  `|`, `;`, `(`, `)`, `:` but never tabs.
+- `hanzi-practice-history.md` — attempt log, lines like `- [<epoch-ms>] <id> 好 (hao3): 5`.
+  Keyed by the entry id; the char + pinyin are included for human readability only. Legacy
+  lines (`- [<epoch-ms>] 好: 5`) still parse and are attributed to every current sense of
+  that char.
 
 ### Spaced repetition (`spaced_repetition.ts`) & grading
 Modified SM-2 over day-numbers (`floor(now / 86_400_000)`). Failing (`<3`) or brand-new →
@@ -206,7 +220,8 @@ Then re-run `npm run test:e2e` and confirm every `[visual]` line reports `matche
    modal to close.
 4b. Re-adding `好` (select a sense, click Add — dup-check runs on Add) keeps the modal open
    with a non-empty `.hanzi-add-error` (duplicate error).
-5. `hanzi-practice-words.md` contains each char **and** `好` has cached `hao3` + a definition.
+5. `hanzi-practice-words.md` contains each char **and** `好` has cached `hao3` + a definition
+   + an 8-hex entry id (4th field).
 6. Practice view is in `.mod-root` (center pane, not a sidebar) and renders `.hanzi-meaning` +
    `.tone-selector` buttons from the cached data.
 6b. Stroke quiz driven with REAL mouse input (puppeteer `page.mouse` → pointer events): a
@@ -216,7 +231,10 @@ Then re-run `npm run test:e2e` and confirm every `[visual]` line reports `matche
    `writer.getStrokeDisplayPoints(0)` and must be accepted (index advances, hint clears,
    `.hanzi-stroke-done` renders). Full-quiz grading is then **simulated**
    (`handleQuizComplete` called directly) to exercise history writing.
-7. `hanzi-practice-history.md` gets the graded line.
+7. `hanzi-practice-history.md` gets the graded line (`<id> 好 (hao3): <score>` — the grading
+   simulation sets `view.currentEntry` from the words-file line read at step 5).
+7b. `edit-hanzi-bank` modal lists all 3 entries (`.hanzi-bank-row`); clicking 字's
+   `.hanzi-bank-remove` drops the row and rewrites the words file without 字 (好/汉 intact).
 8. Settings tab opens.
 
 ### Validate a run

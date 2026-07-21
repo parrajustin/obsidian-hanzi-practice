@@ -798,12 +798,19 @@ async function run() {
         `Expected 好 to have cached pinyin/def (tab-separated); got: ${JSON.stringify(haoLine)}`,
       );
     }
-    const [, haoPinyin, haoEnglish] = haoLine.split('\t');
+    const [, haoPinyin, haoEnglish, haoId] = haoLine.split('\t');
     if (!/hao3/.test(haoPinyin || '') || !(haoEnglish || '').trim()) {
       throw new Error(`好 line missing pinyin/def: ${JSON.stringify(haoLine)}`);
     }
+    // Every entry must carry its stable id (hash of char+pinyin) as the 4th
+    // field — history is keyed by it.
+    if (!/^[0-9a-f]{8}$/.test(haoId || '')) {
+      throw new Error(
+        `好 line missing 8-hex entry id: ${JSON.stringify(haoLine)}`,
+      );
+    }
     console.log(
-      `Verified characters + cached pinyin/def in words file (好 -> ${haoPinyin}).`,
+      `Verified characters + cached pinyin/def/id in words file (好 -> ${haoPinyin}, ${haoId}).`,
     );
 
     // STEP 6: Run the test command so you can test your hanzi skill
@@ -1007,19 +1014,35 @@ async function run() {
     await dump(page, 'step6b-correct-stroke');
 
     console.log('Simulating grading completion...');
-    const graded = await page.evaluate(() => {
-      const workspace = (window as any).app.workspace;
-      const leaves = workspace.getLeavesOfType('hanzi-practice-view');
-      if (leaves.length === 0) return false;
-      const view = leaves[0].view;
-      view.currentCharacter = '好'; // hardcode to the one we expect in test
-      view.pinyinMistakes = 0; // zero mistakes simulated
-      view.handleQuizComplete({
-        character: view.currentCharacter,
-        totalMistakes: 0,
-      });
-      return true;
-    });
+    const graded = await page.evaluate(
+      (entry: {
+        id: string;
+        character: string;
+        pinyin: string;
+        english: string;
+      }) => {
+        const workspace = (window as any).app.workspace;
+        const leaves = workspace.getLeavesOfType('hanzi-practice-view');
+        if (leaves.length === 0) return false;
+        const view = leaves[0].view;
+        // Hardcode to the entry we expect in test (id read from the words
+        // file at STEP 5) — history is keyed by the entry id.
+        view.currentEntry = entry;
+        view.currentCharacter = entry.character;
+        view.pinyinMistakes = 0; // zero mistakes simulated
+        view.handleQuizComplete({
+          character: entry.character,
+          totalMistakes: 0,
+        });
+        return true;
+      },
+      {
+        id: haoId,
+        character: '好',
+        pinyin: haoPinyin,
+        english: haoEnglish,
+      },
+    );
     if (!graded) {
       throw new Error('Could not find the practice view to simulate grading.');
     }
@@ -1035,10 +1058,89 @@ async function run() {
       );
     }
     const historyMd = fs.readFileSync(historyMdPath, 'utf-8');
-    if (!historyMd.includes('好:') || !historyMd.includes('- [')) {
-      throw new Error('Grade not added to hanzi-practice-history.md!');
+    // The line must carry the entry id (the history key) AND the
+    // human-readable character + pinyin.
+    if (
+      !historyMd.includes('- [') ||
+      !historyMd.includes(`${haoId} 好 (${haoPinyin}):`)
+    ) {
+      throw new Error(
+        `Grade with id/char/pinyin not in hanzi-practice-history.md! Contents: ${JSON.stringify(historyMd)}`,
+      );
     }
-    console.log('Verified score in hanzi-practice-history.md');
+    console.log('Verified id-keyed score in hanzi-practice-history.md');
+
+    // STEP 7b: Edit Hanzi Bank — list all entries, then remove one
+    console.log('STEP 7b: Editing the hanzi bank (removing 字)...');
+    let editOpened = false;
+    for (let i = 0; i < 5; i++) {
+      editOpened = await page.evaluate(() => {
+        return (window as any).app.commands.executeCommandById(
+          'hanzi-practice:edit-hanzi-bank',
+        );
+      });
+      if (editOpened) break;
+      await delay(1000);
+    }
+    if (!editOpened) {
+      throw new Error(
+        'Command hanzi-practice:edit-hanzi-bank failed to execute',
+      );
+    }
+    await delay(1000);
+    await page.waitForSelector('.modal .hanzi-bank-row', {
+      timeout: 5000,
+      visible: true,
+    });
+    const bankRows: (string | null)[] = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('.modal .hanzi-bank-row')).map(
+        r => r.querySelector('.hanzi-bank-char')?.textContent ?? null,
+      ),
+    );
+    if (
+      bankRows.length !== charsToAdd.length ||
+      !charsToAdd.every(c => bankRows.includes(c))
+    ) {
+      throw new Error(
+        `Edit-bank rows mismatch; expected ${JSON.stringify(charsToAdd)}, got ${JSON.stringify(bankRows)}`,
+      );
+    }
+    await takeAndCompareScreenshot(page, 'step7b-edit-bank');
+
+    // Remove 字, wait for the row to disappear, and verify the words file.
+    const removeClicked = await page.evaluate(() => {
+      const rows = Array.from(
+        document.querySelectorAll('.modal .hanzi-bank-row'),
+      );
+      const target = rows.find(
+        r => r.querySelector('.hanzi-bank-char')?.textContent === '字',
+      );
+      if (!target) return false;
+      (target.querySelector('button.hanzi-bank-remove') as HTMLElement).click();
+      return true;
+    });
+    if (!removeClicked) {
+      throw new Error('Could not find the 字 row in the edit-bank modal!');
+    }
+    await page.waitForFunction(
+      () => document.querySelectorAll('.modal .hanzi-bank-row').length === 2,
+      {timeout: 5000},
+    );
+    await delay(500);
+    await takeAndCompareScreenshot(page, 'step7b-edit-bank-removed');
+    const wordsAfterRemove = fs.readFileSync(practiceMdPath, 'utf-8');
+    if (wordsAfterRemove.includes('字')) {
+      throw new Error('字 still present in the words file after removal!');
+    }
+    if (!wordsAfterRemove.includes('好') || !wordsAfterRemove.includes('汉')) {
+      throw new Error(
+        `Removal deleted the wrong entries! Contents: ${JSON.stringify(wordsAfterRemove)}`,
+      );
+    }
+    console.log('Verified 字 removed from the bank (words file rewritten).');
+    await page.keyboard.press('Escape');
+    await page.click('.modal-close-button').catch(() => {});
+    await delay(500);
 
     // STEP 8: Go to the plugin settings
     console.log('STEP 8: Opening settings...');

@@ -4,7 +4,11 @@ import {HanziPluginSettings} from '../settings';
 import {CedictEntry} from '../dictionary/cedict_parser';
 import {lookupDefinitions} from '../dictionary/definition_lookup';
 import {prettifyPinyin} from '../utils/prettify_pinyin';
-import {formatPracticeEntry, parsePracticeList} from '../utils/practice_list';
+import {
+  computeEntryId,
+  formatPracticeEntry,
+  parsePracticeList,
+} from '../utils/practice_list';
 
 export class AddCharacterModal extends Modal {
   private character = '';
@@ -172,16 +176,21 @@ export class AddCharacterModal extends Modal {
       text = await this.app.vault.read(file);
     }
 
-    // Check if character already exists (compare the character field only).
+    // Each (character, pinyin) sense is its own practice item — adding 好 hào
+    // alongside an existing 好 hǎo is allowed; re-adding the same sense is not.
+    const id = computeEntryId(char, entry.pinyin);
     const existing = parsePracticeList(text);
-    if (existing.some(e => e.character === char)) {
-      this.showError(`"${char}" is already in your practice list.`);
+    if (existing.some(e => e.id === id)) {
+      this.showError(
+        `"${char} (${prettifyPinyin(entry.pinyin)})" is already in your practice list.`,
+      );
       return; // keep the modal open so the user can correct the input
     }
 
     // Cache the SELECTED sense's pinyin + English onto the practice line so
     // the practice view never needs the dictionary.
     const newLine = formatPracticeEntry({
+      id,
       character: char,
       pinyin: entry.pinyin,
       english: entry.english,
