@@ -653,16 +653,58 @@ async function run() {
       await page.type('.modal input[type="text"]', char);
       await delay(500);
 
-      // Screenshot the dialog for the first character
+      // The Add button must be greyed out until a definition is selected.
+      const disabledBeforeSelect = await page.evaluate(() => {
+        const btn = document.querySelector(
+          '.modal button.mod-cta',
+        ) as HTMLButtonElement | null;
+        return !!btn && btn.disabled;
+      });
+      if (!disabledBeforeSelect) {
+        throw new Error(
+          'Add button was not disabled before selecting a definition!',
+        );
+      }
+
+      // Typing triggers the definition lookup. The FIRST lookup also parses
+      // the (gzipped) CEDICT, so allow generous time for options to render.
+      await page.waitForSelector('.modal .hanzi-def-option', {
+        timeout: 60000,
+        visible: true,
+      });
+
       if (idx === 0) {
+        // 好 has multiple CEDICT senses (hao3 "good", hao4 "to be fond of") —
+        // each must surface as its own selectable option.
+        const optionCount = await page.evaluate(
+          () => document.querySelectorAll('.modal .hanzi-def-option').length,
+        );
+        if (optionCount < 2) {
+          throw new Error(
+            `Expected multiple definition options for 好; got ${optionCount}`,
+          );
+        }
+        // Screenshot the dialog (with its option list) for the first character
         await takeAndCompareScreenshot(page, 'step4-add-character-dialog');
       }
 
-      await page.keyboard.press('Enter');
-      await delay(500);
-      await page.click('.modal button.mod-cta').catch(() => {}); // fallback click, ignore if closed
-      // The modal closes once the character is written. The FIRST add also
-      // parses the (gzipped) CEDICT to cache pinyin+def, so allow time.
+      // Select the first definition option; the Add button must enable.
+      await page.click('.modal .hanzi-def-option');
+      await delay(300);
+      const enabledAfterSelect = await page.evaluate(() => {
+        const btn = document.querySelector(
+          '.modal button.mod-cta',
+        ) as HTMLButtonElement | null;
+        return !!btn && !btn.disabled;
+      });
+      if (!enabledAfterSelect) {
+        throw new Error(
+          'Add button did not enable after selecting a definition!',
+        );
+      }
+
+      await page.click('.modal button.mod-cta');
+      // The modal closes once the character is written.
       await page
         .waitForFunction(
           () => !document.querySelector('.modal input[type="text"]'),
@@ -697,6 +739,14 @@ async function run() {
     });
     await page.type('.modal input[type="text"]', '好'); // already added above
     await delay(500);
+    // The dup-check only runs on Add, which needs a selected definition
+    // (dictionary is already parsed/cached by now, so options come up fast).
+    await page.waitForSelector('.modal .hanzi-def-option', {
+      timeout: 15000,
+      visible: true,
+    });
+    await page.click('.modal .hanzi-def-option');
+    await delay(300);
     await page.click('.modal button.mod-cta').catch(() => {});
     await delay(1000);
 

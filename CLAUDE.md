@@ -41,10 +41,16 @@ spaced-repetition engine, and track history in plain markdown files inside the v
 - `src/components/pinyin_selector.ts` — tone multiple-choice buttons: correct pinyin + 4
   distractors (from `ConstructOtherOptions`), Fisher-Yates shuffled. Wrong pick → `5px solid red`
   + increments a mistake counter; correct → green + `onComplete(mistakes)`.
-- `src/commands/add_character_modal.ts` — modal to add a character. On add: dup-check against the
-  parsed list, then look up pinyin+def via `plugin.getDictionary()` and **cache them onto the
-  practice line**. Duplicate → inline `.hanzi-add-error` (red) + `Notice`, modal stays open;
-  typing clears the error.
+- `src/commands/add_character_modal.ts` — modal to add a character. Typing looks up ALL CEDICT
+  senses via `plugin.getDictionary()` + `lookupDefinitions` and renders them as clickable
+  `.hanzi-def-option` buttons (pretty-tone pinyin + English; e.g. 好 → hǎo/hào). The **Add
+  button stays disabled/greyed until a sense is selected**; a stale-lookup guard (`lookupSeq`)
+  drops out-of-date results. On Add: dup-check against the parsed list, then **cache the
+  SELECTED sense's pinyin+def onto the practice line**. Duplicate → inline `.hanzi-add-error`
+  (red) + `Notice`, modal stays open; typing clears the error + resets the selection.
+- `src/dictionary/definition_lookup.ts` — `lookupDefinitions(dict, input)`: merges
+  simplified+traditional trie hits, dedupes identical payloads, JSON-parses each sense
+  (via `WrapToResult`, skipping malformed ones). Unit-tested in `tests/definition_lookup.test.ts`.
 - `src/dictionary/cedict_parser.ts` — parses `cedict_*.txt` into two `Trie`s (simplified /
   traditional); trie values are JSON `{traditional, simplified, pinyin, english}`.
   `loadDictionary` **gunzips** `.gz` input (detects gzip magic bytes `0x1f 0x8b`) via node `zlib`.
@@ -70,9 +76,9 @@ spaced-repetition engine, and track history in plain markdown files inside the v
 CEDICT is ~10MB; parsing it into a trie every time the practice view opens would be wasteful. So:
 
 ```
-Add character ──▶ plugin.getDictionary()      (lazy, cached, gunzips the .gz)
-                    └─▶ look up pinyin + English for the char
-                        └─▶ write "char⇥pinyin⇥english" into hanzi-practice-words.md
+Add character ──▶ typing triggers plugin.getDictionary()  (lazy, cached, gunzips the .gz)
+                    └─▶ list ALL senses (pretty pinyin + English); user selects one
+                        └─▶ Add enables ─▶ write "char⇥pinyin⇥english" into hanzi-practice-words.md
 
 Practice view ──▶ getNextDueCharacter() + getPracticeEntry()   (read words file only)
                     └─▶ render Meaning + tone selector from the CACHED fields
@@ -194,8 +200,12 @@ Then re-run `npm run test:e2e` and confirm every `[visual]` line reports `matche
 ### Steps & assertions (functional = source of truth)
 1. Vault loads (`window.app.workspace.layoutReady`).
 2/3. Community plugins + Hanzi Practice enabled; command registered.
-4. Add `好 汉 字` (first add parses the dictionary once; runner waits for the modal to close).
-4b. Re-adding `好` keeps the modal open with a non-empty `.hanzi-add-error` (duplicate error).
+4. Add `好 汉 字`: typing must grey out Add (`button.mod-cta` disabled), surface
+   `.hanzi-def-option` entries (first add parses the dictionary once — generous timeout; 好 must
+   show ≥2 senses), clicking an option must enable Add; runner then clicks Add and waits for the
+   modal to close.
+4b. Re-adding `好` (select a sense, click Add — dup-check runs on Add) keeps the modal open
+   with a non-empty `.hanzi-add-error` (duplicate error).
 5. `hanzi-practice-words.md` contains each char **and** `好` has cached `hao3` + a definition.
 6. Practice view is in `.mod-root` (center pane, not a sidebar) and renders `.hanzi-meaning` +
    `.tone-selector` buttons from the cached data.
@@ -412,6 +422,14 @@ the clips are small. Validate with `grep RESULT: component-run.log` → `RESULT:
   `grep`/`ls` calls on the same path. Write run logs into the repo tree (e.g.
   `docker-artifacts/`) instead of /tmp or the scratchpad when a different shell needs to read
   them.
+- **`squashfs-root/` can end up incompletely extracted** (seen 2026-07: `v8_context_snapshot.bin`
+  missing → Obsidian dies instantly with `FATAL:gin/v8_initializer.cc Error loading V8 startup
+  snapshot file` and the E2E fails with "port 9225 never became reachable"). Fix: `rm -rf
+  squashfs-root && ./Obsidian-*.AppImage --appimage-extract`.
+- **`docker build` may transiently fail resolving `node:24-bookworm-slim`** ("network is
+  unreachable" on an IPv6 registry address) even when the `hanzi-e2e` image already exists.
+  Workaround: skip `build-and-run.sh` and `docker run` the existing image directly with the
+  same `-e E2E_REGEN_GOLDENS/-e E2E_EMULATE_MOBILE` and `-v` mounts it uses.
 - **The Obsidian AppImage is NOT committed** (118MB > GitHub's 100MB blob limit — it was
   filter-branched out of history). `scripts/fetch_obsidian.sh` downloads the pinned version
   from Obsidian's official releases if missing (`--extract` also produces `squashfs-root/`
