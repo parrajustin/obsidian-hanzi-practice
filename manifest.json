@@ -1,7 +1,7 @@
 {
 	"id": "hanzi-practice",
 	"name": "Hanzi Practice",
-	"version": "2.0.0",
+	"version": "2.1.0",
 	"minAppVersion": "1.4.0",
 	"description": "Practice writing Chinese characters with spaced repetition.",
 	"author": "Justin Parra",
