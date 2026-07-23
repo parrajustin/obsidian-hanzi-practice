@@ -4,22 +4,43 @@ import {
   FileSystemType,
 } from 'standard-obsidian-lib/src/filesystem/file_util';
 import {SpacedRepetition, Review} from '../spaced_repetition';
-import {PracticeEntry, parsePracticeList} from './practice_list';
+import {
+  BankSource,
+  CardType,
+  entryLabel,
+  HANZI_BANK,
+  HanziEntry,
+  IsFlashcardEntry,
+  PracticeEntry,
+  parsePracticeList,
+} from './practice_list';
 
 /**
- * History lines are keyed by the practice item's id (hash of
- * character+pinyin — see `computeEntryId`), because one character can be
- * practiced as several senses with different pinyin. The character and pinyin
- * are ALSO written on the line so a human reading the file can tell entries
- * apart without decoding the id:
+ * History lines are keyed by the practice item's id (see `computeCardId` and
+ * friends), because one character can be practiced as several senses with
+ * different pinyin, and flashcards have no single-character identity at all.
+ * A human-readable label ("front (back)") is ALSO written on the line so a
+ * person reading the file can tell entries apart without decoding the id:
  *
  *     - [<epoch-ms>] <id> 好 (hao3): 5
+ *     - [<epoch-ms>] <id> What is the capital of France? (Paris): 4
  *
- * The old format (`- [<epoch-ms>] 好: 5`) is still parsed; those reviews are
- * keyed by the bare character and attributed to every current sense of it.
+ * The label is freeform (flashcard fronts contain spaces), so parsing keys
+ * off the leading 8-hex id and the trailing score only. The old hanzi format
+ * (`- [<epoch-ms>] 好: 5`) is still parsed; those reviews are keyed by the
+ * bare character and attributed to every current sense of it.
  */
-const HISTORY_LINE_REGEX = /- \[(\d+)\] ([0-9a-f]{8}) (\S+) \(([^)]*)\): (\d+)/;
+const HISTORY_LINE_REGEX = /- \[(\d+)\] ([0-9a-f]{8}) .*: (\d+)\s*$/;
 const LEGACY_HISTORY_LINE_REGEX = /- \[(\d+)\] (.*?): (\d+)/;
+
+/** True when this entry can actually be practiced by its card type's UI. */
+function isPracticable(entry: PracticeEntry): boolean {
+  if (IsFlashcardEntry(entry)) {
+    return entry.front.length > 0;
+  }
+  // The drawing quiz models exactly one hanzi at a time.
+  return entry.character.length === 1;
+}
 
 export class HistoryManager {
   /** Load and parse the practice list into structured entries. */
@@ -39,6 +60,29 @@ export class HistoryManager {
     return parsePracticeList(text);
   }
 
+  /**
+   * Load the cards of EVERY bank, each from its own file. The file a card
+   * lives in decides its bank — except cards in the Hanzi bank's file, which
+   * keep their line-level bank tag (that file held every bank's cards before
+   * per-bank files existed, and those legacy lines must stay practicable).
+   */
+  static async loadAllPracticeEntries(
+    app: App,
+    sources: BankSource[],
+  ): Promise<PracticeEntry[]> {
+    const all: PracticeEntry[] = [];
+    for (const source of sources) {
+      const entries = await this.loadPracticeEntries(app, source.filePath);
+      for (const entry of entries) {
+        if (source.name !== HANZI_BANK) {
+          entry.bank = source.name;
+        }
+        all.push(entry);
+      }
+    }
+    return all;
+  }
+
   static async appendResult(
     app: App,
     historyFilePath: string,
@@ -46,7 +90,7 @@ export class HistoryManager {
     score: number,
   ): Promise<void> {
     const timestamp = Date.now();
-    const line = `\n- [${timestamp}] ${entry.id} ${entry.character} (${entry.pinyin}): ${score}`;
+    const line = `\n- [${timestamp}] ${entry.id} ${entryLabel(entry)}: ${score}`;
 
     const fileResult = await FileUtil.fetchFile(
       app,
@@ -104,7 +148,7 @@ export class HistoryManager {
       if (match) {
         timestamp = parseInt(match[1]);
         key = match[2];
-        score = parseInt(match[5]);
+        score = parseInt(match[3]);
       } else {
         const legacy = line.match(LEGACY_HISTORY_LINE_REGEX);
         if (!legacy) continue;
@@ -123,24 +167,25 @@ export class HistoryManager {
   }
 
   /**
-   * All reviews that apply to one practice entry: id-keyed reviews plus any
-   * legacy character-keyed reviews (which predate per-sense ids), oldest
-   * first — the order `SpacedRepetition.calculateDueDayNumber` expects.
+   * All reviews that apply to one practice entry: id-keyed reviews plus (for
+   * hanzi cards) any legacy character-keyed reviews (which predate per-sense
+   * ids), oldest first — the order `SpacedRepetition.calculateDueDayNumber`
+   * expects.
    */
   static reviewsForEntry(
     history: Record<string, Review[]>,
     entry: PracticeEntry,
   ): Review[] {
-    const reviews = [
-      ...(history[entry.id] ?? []),
-      ...(history[entry.character] ?? []),
-    ];
+    const legacy = IsFlashcardEntry(entry)
+      ? []
+      : (history[entry.character] ?? []);
+    const reviews = [...(history[entry.id] ?? []), ...legacy];
     return reviews.sort((a, b) => a.timestamp - b.timestamp);
   }
 
   /**
    * Average review score of one entry (0 when it has never been reviewed —
-   * an unreviewed character counts as skill level 0).
+   * an unreviewed card counts as skill level 0).
    */
   static averageScore(reviews: Review[]): number {
     if (reviews.length === 0) return 0;
@@ -151,18 +196,25 @@ export class HistoryManager {
   }
 
   /**
-   * "Mix up": a different character whose average spaced-repetition score is
-   * within 0.5 of `current`'s, picked at random. Other senses of the same
-   * character don't count as different. Null when no character qualifies.
+   * "Mix up": a different hanzi in the same bank whose average
+   * spaced-repetition score is within 0.5 of `current`'s, picked at random.
+   * Other senses of the same character don't count as different. Null when no
+   * character qualifies. (Hanzi-only — flashcards advance via grading.)
    */
   static async getMixUpEntry(
     app: App,
     historyFilePath: string,
-    practiceFilePath: string,
+    sources: BankSource[],
     current: PracticeEntry,
   ): Promise<PracticeEntry | null> {
-    const allEntries = await this.loadPracticeEntries(app, practiceFilePath);
-    const entries = allEntries.filter(e => e.character.length === 1);
+    if (IsFlashcardEntry(current)) return null;
+    const allEntries = await this.loadAllPracticeEntries(app, sources);
+    const entries = allEntries.filter(
+      (e): e is HanziEntry =>
+        e.cardType === CardType.HANZI &&
+        e.bank === current.bank &&
+        isPracticable(e),
+    );
     const history = await this.parseHistory(app, historyFilePath);
 
     const currentAvg = this.averageScore(
@@ -179,14 +231,18 @@ export class HistoryManager {
     return candidates[Math.floor(Math.random() * candidates.length)];
   }
 
+  /**
+   * The next card due for review in one bank: the most overdue due card, or
+   * (when nothing is strictly due) the card with the earliest due date.
+   */
   static async getNextDueEntry(
     app: App,
     historyFilePath: string,
-    practiceFilePath: string,
+    sources: BankSource[],
+    bank: string,
   ): Promise<PracticeEntry | null> {
-    const allEntries = await this.loadPracticeEntries(app, practiceFilePath);
-    // Single hanzi only (matches how the app models practice items).
-    const entries = allEntries.filter(e => e.character.length === 1);
+    const allEntries = await this.loadAllPracticeEntries(app, sources);
+    const entries = allEntries.filter(e => e.bank === bank && isPracticable(e));
 
     if (entries.length === 0) return null;
 

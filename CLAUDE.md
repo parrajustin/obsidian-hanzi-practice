@@ -1,21 +1,40 @@
 # Hanzi Practice — Obsidian Plugin
 
-Obsidian plugin for practicing Chinese characters (hanzi): draw strokes with the plugin's own
-minimal quiz writer (`src/writer/`, graded against a shipped stroke database of medians +
-glyph outlines — no hanzi-writer, no CDN), pick the correct pinyin/tone, get graded via a
-SuperMemo-2-style spaced-repetition engine, and track history in plain markdown files inside
-the vault.
+Obsidian plugin that is a general spaced-repetition practice platform (Anki-style). Every
+practice item is a **card** with a **card type** (how it is practiced) belonging to a **bank**
+(a named cluster of cards practiced together; the `practice` command picks one). Card types:
+
+- **0 = hanzi** (the original & richest type; always in the `Hanzi` bank): draw strokes with
+  the plugin's own minimal quiz writer (`src/writer/`, graded against a shipped stroke
+  database of medians + glyph outlines — no hanzi-writer, no CDN) and pick the correct
+  pinyin/tone; graded automatically from stroke + tone mistakes.
+- **1 = flashcard**: shown the front, recall the back, flip, then self-grade via buttons
+  (Very Easy=5 / Easy=4 / Hard=3 / Very Hard=2 / No Idea=0 — `FLASHCARD_GRADES` in
+  `src/components/flash_card.ts`).
+- **2 = reversible flashcard**: like 1, but either side may be shown as the prompt.
+
+All types feed the same SuperMemo-2-style spaced-repetition engine and track history in plain
+markdown files inside the vault. Ids (view type `hanzi-practice-view`, command ids, entry-id
+hashes) intentionally keep their historical hanzi names — renaming them breaks user
+hotkeys/history.
 
 ---
 
 ## Repo layout
 
-- `src/main.ts` — plugin entry. Registers the `HanziPracticeView` + three commands
-  (`open-hanzi-practice`, `add-hanzi-character`, `edit-hanzi-bank`). `activateView()` opens the practice tab in the
-  **center** pane via `workspace.getLeaf('tab')` (reusing an existing practice leaf if present).
+- `src/main.ts` — plugin entry. Registers the `HanziPracticeView` + five commands
+  (`open-hanzi-practice`, `practice` (choose-bank modal), `add-hanzi-character`,
+  `add-flash-card`, `edit-hanzi-bank` — the last id kept for hotkey compat, it now edits ALL
+  banks). `activateView(bank)` opens the practice tab in the
+  **center** pane via `workspace.getLeaf('tab')` (reusing an existing practice leaf if
+  present) and ALWAYS calls `setViewState` with `state: {bank}` so an open tab switches bank.
   `getDictionary()` lazily loads + **caches** the parsed CEDICT for the plugin lifetime; only the
   add-character modal uses it. `CEDICT_FILE` names the shipped gzip.
-- `src/views/hanzi_view.ts` — the `HanziPracticeView` (ItemView). Picks the next due char, reads
+- `src/views/hanzi_view.ts` — the `HanziPracticeView` (ItemView). One view instance practices
+  ONE bank (`bank` is view state via `setState`/`getState`, default `Hanzi`, so it persists in
+  the workspace layout) and renders whatever UI the due card's type needs: flashcards get a
+  `FlashCard` (flip + self-grade → `handleFlashcardGrade` appends history and advances);
+  an empty non-Hanzi bank shows `.practice-empty`. Hanzi cards: picks the next due char, reads
   its **cached** pinyin + English def **from the practice list** (never CEDICT), renders the
   `Meaning:` line (`.hanzi-meaning`) + `PinyinSelector` (`.tone-selector`) + the quiz writer's
   draw box, grades on quiz complete, appends to history, then reopens for the next char. Gets
@@ -65,9 +84,27 @@ the vault.
   SELECTED sense's pinyin+def+id onto the practice line**. Duplicate → inline
   `.hanzi-add-error` (red) + `Notice`, modal stays open; typing clears the error + selection.
 - `src/commands/edit_bank_modal.ts` — `edit-hanzi-bank` command's modal: lists every practice
-  entry (`.hanzi-bank-row`: char, pretty pinyin, English) with a `.hanzi-bank-remove` button.
-  Removal filters by entry id and rewrites the words file via `formatPracticeEntry` (also
-  migrating old id-less lines). History lines are never touched (they're a log).
+  entry (`.hanzi-bank-row`: char/pretty pinyin/English for hanzi, `.flash-bank-front`/`-back`
+  for flashcards) with a `.hanzi-bank-remove` button, grouped under `.practice-bank-heading`
+  headers **only when more than one bank exists** (a hanzi-only vault renders the same DOM as
+  before — the E2E depends on it). Removal filters by entry id and rewrites the words file via
+  `formatPracticeEntry` (also migrating old-format lines). History lines are never touched
+  (they're a log).
+- `src/commands/add_flashcard_modal.ts` — `add-flash-card` command's modal: bank
+  **dropdown** (`.flash-bank-dropdown`, listing the banks configured in settings; a
+  no-banks message points to Settings when empty), front/back textareas, reversible toggle
+  (`.flash-reversible-toggle`). The card is **written to its bank's own file**
+  (`bank.filePath`). Dup-check by id (`computeFlashcardId(bank, front, back)` — same text may
+  live in two banks); duplicate → inline `.flash-add-error` + `Notice`. Stays open after a
+  successful add (front/back clear, bank + toggle stick) for batch entry.
+- `src/commands/practice_bank_modal.ts` — `practice` command's modal: one
+  `.practice-bank-option` button per bank (name + card count) — every configured bank shows
+  even with 0 cards, `Hanzi` listed first, plus any legacy bank tags found in files; picking
+  one calls `plugin.activateView(bank)`.
+- `src/components/flash_card.ts` — `FlashCard`: `.flash-card` (front, hidden back) +
+  `.flash-card-flip` "Show Answer" button; flipping reveals the back and swaps in
+  `.flash-card-grades` (one `.flash-card-grade` button per `FLASHCARD_GRADES` entry,
+  `data-score` attr). One grade per card; grading an unseen answer is impossible.
 - `src/dictionary/definition_lookup.ts` — `lookupDefinitions(dict, input)`: merges
   simplified+traditional trie hits, dedupes identical payloads, JSON-parses each sense
   (via `WrapToResult`, skipping malformed ones). Unit-tested in `tests/definition_lookup.test.ts`.
@@ -77,17 +114,38 @@ the vault.
 - `src/dictionary/trie.ts` — trie used by the parser + MaxMatch tokenizer.
 - `src/utils/prettify_pinyin.ts` — `prettifyPinyin` (numeric→accented, `shi4`→`shì`) and
   `ConstructOtherOptions` (distractor pinyin; expects **numeric** pinyin like `hao3`).
-- `src/utils/practice_list.ts` — `parsePracticeList` / `formatPracticeEntry` for the words-file
-  format, plus `computeEntryId(char, pinyin)`: FNV-1a 32-bit → 8 hex chars (pure string math,
-  no Node `crypto` — mobile-safe). Each (char, pinyin) sense is its own `PracticeEntry` with
-  its own `id`. Backward-compatible: 3-field lines derive the id, plain one-char lines parse
-  with empty pinyin/def.
+- `src/utils/practice_list.ts` — the data model: `CardType` enum, `HANZI_BANK`, and
+  `PracticeEntry` = `HanziEntry | FlashcardEntry` (discriminated on `cardType`; use
+  `IsFlashcardEntry`, written so a MISSING cardType — e.g. objects injected by the E2E —
+  falls through to the hanzi path). `parsePracticeList` / `formatPracticeEntry` for the
+  words-file format, plus the id hashes (`computeCardId` = FNV-1a 32-bit over
+  `\u001f`-joined parts → 8 hex chars; pure string math, no Node `crypto` — mobile-safe):
+  `computeEntryId(char, pinyin)` (unchanged from the hanzi-only era — existing history must
+  stay attached) and `computeFlashcardId(bank, front, back)`. Each (char, pinyin) sense is
+  its own entry with its own `id`. `sanitizeField` collapses tabs/newlines in user text so
+  the line format survives. Backward-compatible: 4-field lines get cardType 0 + bank `Hanzi`,
+  3-field lines also derive the id, plain one-char lines parse with empty pinyin/def; unknown
+  card types parse as hanzi (forward compat) rather than being dropped. `listBanks` returns
+  distinct banks, `Hanzi` first.
 - `src/utils/history_manager.ts` — reads/writes `hanzi-practice-history.md` **keyed by entry
   id** (`parseHistory` also accepts legacy char-keyed lines; `reviewsForEntry` merges id-keyed
-  + legacy reviews oldest-first), picks the next due entry (`getNextDueEntry` — senses of the
-  same char schedule independently), and loads entries (`loadPracticeEntries`).
+  + legacy reviews oldest-first — legacy attribution applies to hanzi cards only), loads all
+  banks' files (`loadAllPracticeEntries(app, sources)` — **the file a card lives in decides
+  its bank**, except lines in the Hanzi file which keep their line-level bank tag: that file
+  held every bank's cards before per-bank files existed), and picks the next due entry **per
+  bank** (`getNextDueEntry(app, historyPath, sources, bank)` — senses of the same char
+  schedule independently; `getMixUpEntry` is hanzi-only and stays in the current bank).
 - `src/spaced_repetition.ts` — SR scheduling (see below).
-- `src/settings.ts` — Zod-schema settings (`historyFilePath`, `practiceFilePath`) + settings tab.
+- `src/settings.ts` — Zod-schema settings, now **v1** (SchemaManager migration from v0 adds
+  `banks: []`): `historyFilePath`, `practiceFilePath` (the Hanzi bank's file), and
+  `banks: {name, filePath}[]` — **each bank stores its cards in its own file**, exactly like
+  the Hanzi bank's words file. `bankSources(settings)` flattens that into the `BankSource[]`
+  (Hanzi first) that all read paths consume. The settings tab's "Practice Banks" section is a
+  LIST — one row per bank (`.hanzi-bank-row-setting`: name `.hanzi-bank-name` + file path
+  `.hanzi-bank-path` text fields and a trash `.hanzi-bank-delete` remove button that only
+  drops the config, never the file) — plus an "Add Bank" button (`.hanzi-bank-add`) that
+  appends a row. **`hide()` (settings closed) re-parses every bank file** and shows a Notice
+  with per-bank card counts, so path edits take effect (and typos surface) immediately.
 - Depends on sibling repos `../standard-obsidian-lib` and `../standard-ts-lib` (`file:` deps).
   `FileUtil.fetchFile(app, path, RAW)` reads via `app.vault.adapter.readBinary` (vault-root
   relative); `OBSIDIAN` type reads via the vault API.
@@ -122,16 +180,26 @@ hands it to `StrokeDataReader` — per-character decode on demand. **No network 
 needed**; the old hanzi-writer CDN dependency is gone.
 
 ### Data files (in the vault)
-- `hanzi-practice-words.md` — one entry per line, **TAB-separated**:
-  `char⇥pinyin⇥english⇥id` (e.g. `好\thao3\tgood/appropriate; …\t<8-hex id>`). `pinyin` is
-  numeric CEDICT form; `id` = `computeEntryId(char, pinyin)`. A char can appear on several
-  lines (one per sense). Old 3-field and plain one-char lines are still accepted (id derived,
-  pinyin/def empty). Tabs are used as the separator because CEDICT definitions contain `/`,
-  `|`, `;`, `(`, `)`, `:` but never tabs.
-- `hanzi-practice-history.md` — attempt log, lines like `- [<epoch-ms>] <id> 好 (hao3): 5`.
-  Keyed by the entry id; the char + pinyin are included for human readability only. Legacy
-  lines (`- [<epoch-ms>] 好: 5`) still parse and are attributed to every current sense of
-  that char.
+- **One file per bank**, all sharing the same line format: `hanzi-practice-words.md` holds
+  the Hanzi bank; every settings-configured bank names its own file (e.g.
+  `capitals-cards.md`). A card's bank comes from the file it lives in — except lines in the
+  hanzi file, which keep their line-level bank tag (pre-per-bank-file data).
+- Line format — one card per line, **TAB-separated**, 6 fields:
+  `f0⇥f1⇥f2⇥id⇥cardType⇥bank`. For hanzi cards (type 0) f0/f1/f2 =
+  char/pinyin/english (e.g. `好\thao3\tgood/appropriate; …\t<8-hex id>\t0\tHanzi`); for
+  flashcards (types 1/2) f0/f1 = front/back, f2 empty. `pinyin` is numeric CEDICT form;
+  hanzi `id` = `computeEntryId(char, pinyin)` (historical hash — unchanged), flashcard `id` =
+  `computeFlashcardId(bank, front, back)`. A char can appear on several lines (one per
+  sense). Old 4-field/3-field and plain one-char lines are still accepted (cardType 0 + bank
+  `Hanzi` assumed; id derived when missing; pinyin/def empty). Tabs are used as the separator
+  because CEDICT definitions contain `/`, `|`, `;`, `(`, `)`, `:` but never tabs — and
+  `sanitizeField` keeps tabs/newlines out of flashcard text.
+- `hanzi-practice-history.md` — attempt log, lines like `- [<epoch-ms>] <id> 好 (hao3): 5`
+  (flashcards: `- [<epoch-ms>] <id> <front> (<back>): 3`, both sides truncated to 40 chars).
+  Keyed by the entry id; the "front (back)" label is for human readability only, so the
+  parser matches the leading 8-hex id + trailing score and ignores the freeform middle.
+  Legacy lines (`- [<epoch-ms>] 好: 5`) still parse and are attributed to every current
+  sense of that char (hanzi cards only — never to flashcards).
 
 ### Spaced repetition (`spaced_repetition.ts`) & grading
 Modified SM-2 over day-numbers (`floor(now / 86_400_000)`). Failing (`<3`) or brand-new →
@@ -139,7 +207,9 @@ due immediately; passing → review #1 `+1` day, #2 `+6`, #3+ `lastReviewDay + c
 * efactor)` where efactor accumulates the SM-2 modifier (min 1.3). Final grade =
 `min(strokeScore, pinyinCeiling)` — stroke mistakes give a 0–5 base, pinyin mistakes cap it
 (`>1`→3, `1`→4, `0`→5) — **unless Give Up was pressed, which locks the grade to 0** no matter
-how the guided strokes are then traced. Full spec in `hanzi-practice-architecture.md`.
+how the guided strokes are then traced. Flashcards skip all of that: the user self-grades
+(`FLASHCARD_GRADES` button → 5/4/3/2/0) and that value feeds the scheduler directly. Full
+spec in `hanzi-practice-architecture.md`.
 
 ---
 
@@ -248,6 +318,28 @@ Then re-run `npm run test:e2e:docker` and confirm every `[visual]` line reports 
 7b. `edit-hanzi-bank` modal lists all 3 entries (`.hanzi-bank-row`); clicking 字's
    `.hanzi-bank-remove` drops the row and rewrites the words file without 字 (好/汉 intact).
 8. Settings tab opens.
+9. Flashcards, end to end. 9a: drives the settings **Practice Banks** list UI with real
+   clicks — "Add Bank" twice, renaming/repathing each new row via its
+   `.hanzi-bank-name`/`.hanzi-bank-path` fields (the LAST match = newest row) — creating
+   `Capitals` → `capitals-cards.md` and `German` → `german-cards.md`; asserts both rows are
+   in the list; closing settings fires the hide() re-parse; asserts `plugin.settings.banks`. 9b: `add-flash-card`
+   modal (bank picked in the `.flash-bank-dropdown`, front `France`, back `Paris`, typed with
+   real key events) → Add writes the 6-field line (`France⇥Paris⇥⇥<id>⇥1⇥Capitals`, id =
+   `computeFlashcardId` — the runner imports it from `src/utils/practice_list`) **into
+   capitals-cards.md** (and asserts it did NOT leak into the hanzi words file); the modal
+   stays open. 9c: `practice` command lists banks (`Hanzi` first, `German` present with 0
+   cards) → clicking `Capitals` switches the open practice view to the bank; `.flash-card`
+   shows the front with back + grades hidden; `.flash-card-flip` reveals `Paris` and exactly
+   the 5 grade buttons (labels + `data-score` 5/4/3/2/0); clicking Easy appends
+   `<id> France (Paris): 4` to history and the view advances (same card again — only card in
+   the bank). Before the step9 screenshots the runner REMOVES all `.notice` toasts: their 5s
+   fade timers are run-timing dependent and were the one source of golden flake.
+10. Reversible flashcard, deliberately **non-visual** (which side is the prompt is random):
+   adds `dog`/`Hund` to `German` with the reversible toggle ON → asserts the
+   `dog⇥Hund⇥⇥<id>⇥2⇥German` line in `german-cards.md`; practices the `German` bank —
+   asserts the prompt is one of the two sides, the flip reveals the OTHER side, and grading
+   Very Easy appends `<id> dog (Hund): 5` (the history label always uses the stored
+   front (back), independent of the side shown). Dumps only, no goldens.
 
 ### Validate a run
 - **Exit code 0** and the log's last line is `RESULT: PASS`:
@@ -286,6 +378,13 @@ npm run test:e2e:docker:goldens    # same, but regenerate goldens inside the con
   siblings (needed for the `file:../standard-*` deps that live outside this repo), builds, and
   runs with `--shm-size=512m`, mounting `docker-artifacts/` (gitignored) as `/out` **and**
   `docker/__golden__` over the container's `tests/__goldens__`.
+- **The test vault is inspectable after every E2E run**: the container's throwaway vault
+  (`test_vault`) is bind-mounted to `docker-artifacts/desktop_vault` (or `mobile_vault` under
+  `E2E_EMULATE_MOBILE=1`), so the exact `hanzi-practice-words.md` / `hanzi-practice-history.md`
+  / `.obsidian/` state the run produced survives on the host (live during the run, too). The
+  script wipes that directory before each run, and the runner's own vault wipe deletes the
+  dir's CONTENTS (never the dir — a mount point can't be `rm`'d, EBUSY). Component-runner
+  invocations skip the mount (no vault content, and mounting would wipe the E2E's copy).
 - **Container goldens live in `docker/__golden__/` (committed)** — separate from the host's
   `tests/__goldens__` because the container renders **light** theme at **1024×800** vs the host's
   dark 1280×1000. The dir is **bind-mounted** over the container's golden path, so Docker runs

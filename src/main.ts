@@ -6,7 +6,10 @@ import {
 } from './settings';
 import {HanziPracticeView} from './views/hanzi_view';
 import {AddCharacterModal} from './commands/add_character_modal';
+import {AddFlashcardModal} from './commands/add_flashcard_modal';
 import {EditBankModal} from './commands/edit_bank_modal';
+import {PracticeBankModal} from './commands/practice_bank_modal';
+import {HANZI_BANK} from './utils/practice_list';
 import {CedictParser} from './dictionary/cedict_parser';
 import {StrokeDataReader} from './data/stroke_codec';
 import {loadStrokeData} from './data/stroke_data';
@@ -82,6 +85,16 @@ export default class HanziPracticePlugin extends Plugin {
       },
     });
 
+    // The general entry point: pick a bank, then practice its cards with
+    // whatever UI each card type needs.
+    this.addCommand({
+      id: 'practice',
+      name: 'Practice (Choose Bank)',
+      callback: () => {
+        new PracticeBankModal(this.app, this).open();
+      },
+    });
+
     this.addCommand({
       id: 'add-hanzi-character',
       name: 'Add Hanzi Character to Practice',
@@ -91,15 +104,25 @@ export default class HanziPracticePlugin extends Plugin {
     });
 
     this.addCommand({
+      id: 'add-flash-card',
+      name: 'Add Flash Card to Practice',
+      callback: () => {
+        new AddFlashcardModal(this.app, this).open();
+      },
+    });
+
+    // Id kept from when the plugin was hanzi-only (renaming command ids
+    // breaks users' hotkey bindings); it now edits every bank.
+    this.addCommand({
       id: 'edit-hanzi-bank',
-      name: 'Edit Hanzi Practice Bank',
+      name: 'Edit Practice Banks',
       callback: () => {
         new EditBankModal(this.app, this).open();
       },
     });
   }
 
-  async activateView() {
+  async activateView(bank: string = HANZI_BANK) {
     const {workspace} = this.app;
 
     // Reuse an existing practice tab if one is already open.
@@ -110,9 +133,15 @@ export default class HanziPracticePlugin extends Plugin {
       // getLeaf('tab') opens a new tab in the main (center) editor area,
       // never in the left/right sidebars.
       leaf = workspace.getLeaf('tab');
-      await leaf.setViewState({type: HANZI_VIEW_TYPE, active: true});
     }
 
+    // Always set the state: an already-open practice tab switches to the
+    // chosen bank (the bank is view state — see HanziPracticeView.setState).
+    await leaf.setViewState({
+      type: HANZI_VIEW_TYPE,
+      active: true,
+      state: {bank},
+    });
     await workspace.revealLeaf(leaf);
   }
 
@@ -131,9 +160,10 @@ export default class HanziPracticePlugin extends Plugin {
       this.settings = defRes.ok
         ? defRes.val
         : {
-            version: 0,
+            version: 1,
             historyFilePath: 'history.md',
             practiceFilePath: 'practice.md',
+            banks: [],
           };
     }
   }

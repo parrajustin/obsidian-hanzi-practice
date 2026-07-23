@@ -5,6 +5,7 @@ import * as zlib from 'zlib';
 import puppeteer, {type Page} from 'puppeteer-core';
 import {PNG} from 'pngjs';
 import pixelmatch from 'pixelmatch';
+import {computeFlashcardId} from '../src/utils/practice_list';
 
 // --- Mobile emulation ----------------------------------------------------
 // E2E_EMULATE_MOBILE=1 runs the whole flow with Obsidian's built-in mobile
@@ -233,7 +234,13 @@ async function run() {
   const profilePath = '/tmp/obsidian-test-profile';
   if (fs.existsSync(vaultPath)) {
     console.log('Wiping existing test vault...');
-    fs.rmSync(vaultPath, {recursive: true, force: true});
+    // Wipe CONTENTS rather than the directory: under docker the vault dir is
+    // a bind mount (exposed on the host as docker-artifacts/desktop_vault or
+    // mobile_vault for post-run inspection), and a mount point itself cannot
+    // be removed (EBUSY).
+    for (const name of fs.readdirSync(vaultPath)) {
+      fs.rmSync(path.join(vaultPath, name), {recursive: true, force: true});
+    }
   }
   if (fs.existsSync(profilePath)) {
     console.log('Wiping existing test profile...');
@@ -1153,6 +1160,439 @@ async function run() {
     });
     await delay(1000);
     await takeAndCompareScreenshot(page, 'step8-settings');
+    await page.keyboard.press('Escape');
+    await delay(500);
+
+    // STEP 9: Flashcards. Banks are defined in settings, each storing its
+    // cards in its OWN file (like the Hanzi words file) — so first create two
+    // banks through the settings UI, then add + practice a card.
+    console.log(
+      'STEP 9a: Creating banks via the settings Practice Banks UI...',
+    );
+    await page.evaluate(() => {
+      (window as any).app.setting.open();
+      setTimeout(
+        () => (window as any).app.setting.openTabById('hanzi-practice'),
+        200,
+      );
+    });
+    // open() restores the last-open tab (ours, from STEP 8) and renders it
+    // immediately; the queued openTabById renders it AGAIN at ~200ms. Wait
+    // out both renders before interacting, or the second one rebuilds the
+    // pane mid-typing and the keystrokes land on a detached input.
+    await delay(800);
+    await page.waitForSelector('.hanzi-bank-add', {timeout: 10000});
+    // Sets a bank text field by dispatching an `input` event on the LIVE
+    // element (queried at dispatch time) — Obsidian's TextComponent onChange
+    // listens to `input`, and this can't miss like focus-dependent typing
+    // can when a re-render swaps the element out. Banks render as a LIST
+    // (one row per bank); "Add Bank" appends a row, so the LAST match is
+    // always the newest bank's field.
+    const setBankField = async (selector: string, value: string) => {
+      await page.waitForSelector(selector, {timeout: 10000});
+      await page.evaluate(
+        (sel: string, v: string) => {
+          const els = document.querySelectorAll(sel);
+          const el = els[els.length - 1] as HTMLInputElement;
+          el.value = v;
+          el.dispatchEvent(new Event('input', {bubbles: true}));
+        },
+        selector,
+        value,
+      );
+      await delay(200);
+    };
+    // "Add Bank" appends a row; its name/path fields then configure it.
+    await page.click('.hanzi-bank-add');
+    await delay(400);
+    await setBankField('.hanzi-bank-name', 'Capitals');
+    await setBankField('.hanzi-bank-path', 'capitals-cards.md');
+    // A second bank, used by the reversible-card test (STEP 10).
+    await page.click('.hanzi-bank-add');
+    await delay(400);
+    await setBankField('.hanzi-bank-name', 'German');
+    await setBankField('.hanzi-bank-path', 'german-cards.md');
+    // Both bank rows must be visible in the list at once.
+    const bankRowCount = await page.evaluate(
+      () => document.querySelectorAll('.hanzi-bank-row-setting').length,
+    );
+    if (bankRowCount !== 2) {
+      throw new Error(`Expected 2 bank rows in settings, got ${bankRowCount}`);
+    }
+    // Earlier settings-close parse notices may still be mid-fade here —
+    // dismiss them so the golden is deterministic (see the step9 note below).
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step9-bank-settings');
+    // Closing settings triggers hide(), which re-parses every bank file.
+    await page.keyboard.press('Escape');
+    await delay(500);
+    const bankSettings = await page.evaluate(() => {
+      return (window as any).app.plugins.plugins['hanzi-practice'].settings
+        .banks;
+    });
+    const expectedBanks = [
+      {name: 'Capitals', filePath: 'capitals-cards.md'},
+      {name: 'German', filePath: 'german-cards.md'},
+    ];
+    if (JSON.stringify(bankSettings) !== JSON.stringify(expectedBanks)) {
+      throw new Error(
+        `Bank settings wrong: ${JSON.stringify(bankSettings)}, expected ${JSON.stringify(expectedBanks)}`,
+      );
+    }
+    console.log('Verified banks configured with their own storage files.');
+
+    console.log('STEP 9b: Adding a flashcard via the add-flash-card modal...');
+    const flashOpened = await page.evaluate(() => {
+      return (window as any).app.commands.executeCommandById(
+        'hanzi-practice:add-flash-card',
+      );
+    });
+    if (!flashOpened) {
+      throw new Error(
+        'Command hanzi-practice:add-flash-card failed to execute',
+      );
+    }
+    await page.waitForSelector('.modal .flash-bank-dropdown', {
+      timeout: 10000,
+    });
+    // The settings-close parse notice would otherwise linger in screenshots.
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    // Pick the bank from the dropdown (option values are bank indexes), then
+    // fill front and back (textareas). Real key/change events throughout.
+    await page.select('.modal .flash-bank-dropdown', '0'); // Capitals
+    const textareas = await page.$$('.modal textarea');
+    if (textareas.length < 2) {
+      throw new Error(
+        `Expected front+back textareas in add-flash-card modal, found ${textareas.length}`,
+      );
+    }
+    await textareas[0].type('France');
+    await textareas[1].type('Paris');
+    await takeAndCompareScreenshot(page, 'step9-add-flashcard');
+    await page.evaluate(() => {
+      const btn = document.querySelector(
+        '.modal button.mod-cta',
+      ) as HTMLElement | null;
+      if (btn) btn.click();
+    });
+    // The modal stays open for batch entry; the card lands in the BANK's own
+    // file (capitals-cards.md), never in the hanzi words file.
+    const capitalsMdPath = path.join(vaultPath, 'capitals-cards.md');
+    const flashId = computeFlashcardId('Capitals', 'France', 'Paris');
+    let flashLineOk = false;
+    for (let i = 0; i < 20; i++) {
+      const cards = fs.existsSync(capitalsMdPath)
+        ? fs.readFileSync(capitalsMdPath, 'utf-8')
+        : '';
+      if (cards.includes(`France\tParis\t\t${flashId}\t1\tCapitals`)) {
+        flashLineOk = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!flashLineOk) {
+      throw new Error(
+        'Flashcard line (front/back/id/cardType/bank) not written to capitals-cards.md',
+      );
+    }
+    if (fs.readFileSync(practiceMdPath, 'utf-8').includes('France')) {
+      throw new Error(
+        'Flashcard leaked into the hanzi words file instead of its bank file',
+      );
+    }
+    console.log("Verified flashcard line cached into the bank's own file.");
+    await page.keyboard.press('Escape');
+    await delay(500);
+    // Notices ("Added card…", earlier "Removed…") fade out on their own 5s
+    // timers, so whether one is mid-fade in a screenshot is run-timing
+    // dependent — dismiss them all so the step9 goldens are deterministic.
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+
+    console.log('STEP 9b: Practice command lists banks; picking Capitals...');
+    const practiceOpened = await page.evaluate(() => {
+      return (window as any).app.commands.executeCommandById(
+        'hanzi-practice:practice',
+      );
+    });
+    if (!practiceOpened) {
+      throw new Error('Command hanzi-practice:practice failed to execute');
+    }
+    await page.waitForSelector('.modal .practice-bank-option', {
+      timeout: 10000,
+    });
+    const bankLabels = await page.evaluate(() =>
+      Array.from(document.querySelectorAll('.modal .practice-bank-option')).map(
+        b => b.querySelector('.practice-bank-name')?.textContent ?? null,
+      ),
+    );
+    // Hanzi must be listed first; both configured banks must be present —
+    // including German, which has no cards yet (configured banks always show).
+    if (
+      bankLabels[0] !== 'Hanzi' ||
+      !bankLabels.includes('Capitals') ||
+      !bankLabels.includes('German')
+    ) {
+      throw new Error(
+        `Bank selector wrong: expected [Hanzi, Capitals, German], got ${JSON.stringify(bankLabels)}`,
+      );
+    }
+    await takeAndCompareScreenshot(page, 'step9-bank-select');
+    await page.evaluate(() => {
+      const target = Array.from(
+        document.querySelectorAll('.modal .practice-bank-option'),
+      ).find(
+        b => b.querySelector('.practice-bank-name')?.textContent === 'Capitals',
+      );
+      (target as HTMLElement | undefined)?.click();
+    });
+
+    console.log('STEP 9c: Flip the flashcard and grade it...');
+    await page.waitForSelector('.flash-card', {timeout: 10000});
+    const beforeFlip = await page.evaluate(() => {
+      const front = document.querySelector('.flash-card-front') as HTMLElement;
+      const back = document.querySelector('.flash-card-back') as HTMLElement;
+      const grades = document.querySelector(
+        '.flash-card-grades',
+      ) as HTMLElement;
+      return {
+        front: front?.textContent ?? null,
+        backHidden: back ? back.style.display === 'none' : false,
+        gradesHidden: grades ? grades.style.display === 'none' : false,
+      };
+    });
+    if (
+      beforeFlip.front !== 'France' ||
+      !beforeFlip.backHidden ||
+      !beforeFlip.gradesHidden
+    ) {
+      throw new Error(
+        `Flashcard front state wrong: ${JSON.stringify(beforeFlip)}`,
+      );
+    }
+    await takeAndCompareScreenshot(page, 'step9-flashcard-front');
+    await page.click('.flash-card-flip');
+    const afterFlip = await page.evaluate(() => {
+      const back = document.querySelector('.flash-card-back') as HTMLElement;
+      const grades = Array.from(
+        document.querySelectorAll('.flash-card-grade'),
+      ) as HTMLElement[];
+      return {
+        back: back?.textContent ?? null,
+        backVisible: back ? back.style.display !== 'none' : false,
+        gradeLabels: grades.map(g => g.textContent),
+        gradeScores: grades.map(g => g.dataset.score),
+      };
+    });
+    if (
+      afterFlip.back !== 'Paris' ||
+      !afterFlip.backVisible ||
+      afterFlip.gradeLabels.join(',') !==
+        'Very Easy,Easy,Hard,Very Hard,No Idea' ||
+      afterFlip.gradeScores.join(',') !== '5,4,3,2,0'
+    ) {
+      throw new Error(
+        `Flashcard flip state wrong: ${JSON.stringify(afterFlip)}`,
+      );
+    }
+    console.log('Verified flip reveals the back and the 5 grade buttons.');
+    await takeAndCompareScreenshot(page, 'step9-flashcard-back');
+    await page.evaluate(() => {
+      const easy = Array.from(
+        document.querySelectorAll('.flash-card-grade'),
+      ).find(b => (b as HTMLElement).dataset.score === '4');
+      (easy as HTMLElement | undefined)?.click();
+    });
+    let flashHistoryOk = false;
+    for (let i = 0; i < 20; i++) {
+      const history = fs.existsSync(historyMdPath)
+        ? fs.readFileSync(historyMdPath, 'utf-8')
+        : '';
+      if (history.includes(`${flashId} France (Paris): 4`)) {
+        flashHistoryOk = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!flashHistoryOk) {
+      throw new Error(
+        'Graded flashcard did not append an id-keyed history line',
+      );
+    }
+    console.log('Verified flashcard grade written to history, keyed by id.');
+    // Only card in the bank → the view advances to it again.
+    await page.waitForSelector('.flash-card-flip', {timeout: 10000});
+
+    // STEP 10: Reversible flashcard — add one to the German bank with the
+    // reversible toggle ON, then practice it. Which side is the prompt is
+    // RANDOM for reversible cards, so this step is deliberately non-visual:
+    // assert the shown side is one of the two and the flip reveals the other,
+    // then verify the graded history entry (whose label is always the stored
+    // front (back), independent of the side that was shown).
+    console.log('STEP 10: Adding a REVERSIBLE flashcard to the German bank...');
+    const revOpened = await page.evaluate(() => {
+      return (window as any).app.commands.executeCommandById(
+        'hanzi-practice:add-flash-card',
+      );
+    });
+    if (!revOpened) {
+      throw new Error(
+        'Command hanzi-practice:add-flash-card failed to execute (step 10)',
+      );
+    }
+    await page.waitForSelector('.modal .flash-bank-dropdown', {
+      timeout: 10000,
+    });
+    await page.select('.modal .flash-bank-dropdown', '1'); // German
+    const revAreas = await page.$$('.modal textarea');
+    await revAreas[0].type('dog');
+    await revAreas[1].type('Hund');
+    await page.click('.modal .flash-reversible-toggle');
+    await dump(page, 'step10-add-reversible');
+    await page.evaluate(() => {
+      const btn = document.querySelector(
+        '.modal button.mod-cta',
+      ) as HTMLElement | null;
+      if (btn) btn.click();
+    });
+    const germanMdPath = path.join(vaultPath, 'german-cards.md');
+    const revId = computeFlashcardId('German', 'dog', 'Hund');
+    let revLineOk = false;
+    for (let i = 0; i < 20; i++) {
+      const cards = fs.existsSync(germanMdPath)
+        ? fs.readFileSync(germanMdPath, 'utf-8')
+        : '';
+      // Card type 2 = reversible.
+      if (cards.includes(`dog\tHund\t\t${revId}\t2\tGerman`)) {
+        revLineOk = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!revLineOk) {
+      throw new Error(
+        'Reversible flashcard line (cardType 2) not written to german-cards.md',
+      );
+    }
+    console.log('Verified reversible card (type 2) in german-cards.md.');
+    await page.keyboard.press('Escape');
+    await delay(500);
+
+    console.log('STEP 10b: Practicing the reversible card...');
+    const revPractice = await page.evaluate(() => {
+      return (window as any).app.commands.executeCommandById(
+        'hanzi-practice:practice',
+      );
+    });
+    if (!revPractice) {
+      throw new Error('Command hanzi-practice:practice failed (step 10b)');
+    }
+    await page.waitForSelector('.modal .practice-bank-option', {
+      timeout: 10000,
+    });
+    await page.evaluate(() => {
+      const target = Array.from(
+        document.querySelectorAll('.modal .practice-bank-option'),
+      ).find(
+        b => b.querySelector('.practice-bank-name')?.textContent === 'German',
+      );
+      (target as HTMLElement | undefined)?.click();
+    });
+    await page.waitForSelector('.flash-card', {timeout: 10000});
+    // Poll until the German card is the one on screen (the view may briefly
+    // still show the Capitals card from step 9c while it re-renders).
+    let revShown: {front: string | null; backHidden: boolean} = {
+      front: null,
+      backHidden: false,
+    };
+    for (let i = 0; i < 40; i++) {
+      revShown = await page.evaluate(() => {
+        const front = document.querySelector(
+          '.flash-card-front',
+        ) as HTMLElement | null;
+        const back = document.querySelector(
+          '.flash-card-back',
+        ) as HTMLElement | null;
+        return {
+          front: front?.textContent ?? null,
+          backHidden: back ? back.style.display === 'none' : false,
+        };
+      });
+      if (revShown.front === 'dog' || revShown.front === 'Hund') break;
+      await delay(250);
+    }
+    // Either side may be the prompt — but it must be one of the two, with
+    // the answer hidden until the flip.
+    if (
+      (revShown.front !== 'dog' && revShown.front !== 'Hund') ||
+      !revShown.backHidden
+    ) {
+      throw new Error(
+        `Reversible card prompt state wrong: ${JSON.stringify(revShown)}`,
+      );
+    }
+    await dump(page, 'step10-reversible-prompt');
+    await page.click('.flash-card-flip');
+    const revFlipped = await page.evaluate(() => {
+      const front = document.querySelector(
+        '.flash-card-front',
+      ) as HTMLElement | null;
+      const back = document.querySelector(
+        '.flash-card-back',
+      ) as HTMLElement | null;
+      return {
+        front: front?.textContent ?? null,
+        back: back?.textContent ?? null,
+        backVisible: back ? back.style.display !== 'none' : false,
+      };
+    });
+    const sides = [revFlipped.front, revFlipped.back].sort();
+    if (
+      !revFlipped.backVisible ||
+      JSON.stringify(sides) !== JSON.stringify(['Hund', 'dog'].sort())
+    ) {
+      throw new Error(
+        `Reversible flip wrong (must reveal the OTHER side): ${JSON.stringify(revFlipped)}`,
+      );
+    }
+    console.log(`Verified reversible flip (prompt was "${revFlipped.front}").`);
+    await dump(page, 'step10-reversible-flipped');
+    await page.evaluate(() => {
+      const veryEasy = Array.from(
+        document.querySelectorAll('.flash-card-grade'),
+      ).find(b => (b as HTMLElement).dataset.score === '5');
+      (veryEasy as HTMLElement | undefined)?.click();
+    });
+    let revHistoryOk = false;
+    for (let i = 0; i < 20; i++) {
+      const history = fs.existsSync(historyMdPath)
+        ? fs.readFileSync(historyMdPath, 'utf-8')
+        : '';
+      if (history.includes(`${revId} dog (Hund): 5`)) {
+        revHistoryOk = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!revHistoryOk) {
+      throw new Error(
+        'Graded reversible card did not append its id-keyed history line',
+      );
+    }
+    console.log(
+      'Verified reversible-card grade in history, keyed by id with stored front (back) label.',
+    );
 
     log('E2E steps complete!');
     log('Closing Obsidian...');

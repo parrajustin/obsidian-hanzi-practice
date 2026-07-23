@@ -5,8 +5,10 @@ import {CedictEntry} from '../dictionary/cedict_parser';
 import {lookupDefinitions} from '../dictionary/definition_lookup';
 import {prettifyPinyin} from '../utils/prettify_pinyin';
 import {
+  CardType,
   computeEntryId,
   formatPracticeEntry,
+  HANZI_BANK,
   parsePracticeList,
 } from '../utils/practice_list';
 
@@ -188,9 +190,12 @@ export class AddCharacterModal extends Modal {
     }
 
     // Cache the SELECTED sense's pinyin + English onto the practice line so
-    // the practice view never needs the dictionary.
+    // the practice view never needs the dictionary. Hanzi cards always live
+    // in the "Hanzi" bank.
     const newLine = formatPracticeEntry({
       id,
+      cardType: CardType.HANZI,
+      bank: HANZI_BANK,
       character: char,
       pinyin: entry.pinyin,
       english: entry.english,

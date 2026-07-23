@@ -57,12 +57,31 @@ docker build -t "$IMAGE" -f "$REPO_DIR/docker/Dockerfile" "$CTX"
 
 echo ">> Running E2E (headless, Xvfb)"
 mkdir -p "$OUT_DIR" "$GOLDEN_DIR"
+
+# Bind-mount the throwaway vault into docker-artifacts/ (desktop_vault or
+# mobile_vault, matching the emulation mode) so its files can be inspected
+# after — and even during — a run. Wiped here before every run; the runner
+# additionally empties it (mount-point-safe) as part of its own setup. Not
+# mounted for the component runner, which uses no vault content — and mounting
+# would pointlessly wipe the previous E2E run's inspection copy.
+VAULT_MOUNT=()
+if [[ "$*" != *component_runner* ]]; then
+  VAULT_NAME="desktop_vault"
+  [ -n "${E2E_EMULATE_MOBILE:-}" ] && VAULT_NAME="mobile_vault"
+  VAULT_DIR="$OUT_DIR/$VAULT_NAME"
+  echo ">> Wiping $VAULT_DIR (vault will be inspectable there after the run)"
+  rm -rf "$VAULT_DIR"
+  mkdir -p "$VAULT_DIR"
+  VAULT_MOUNT=(-v "$VAULT_DIR:/workspace/obsidian-hanzi-practice/test_vault")
+fi
+
 docker run --rm \
   --shm-size=512m \
   -e E2E_REGEN_GOLDENS="${E2E_REGEN_GOLDENS:-}" \
   -e E2E_EMULATE_MOBILE="${E2E_EMULATE_MOBILE:-}" \
   -v "$OUT_DIR:/out" \
   -v "$GOLDEN_DIR:$CONTAINER_GOLDEN_DIR" \
+  "${VAULT_MOUNT[@]}" \
   "$IMAGE" "$@"
 
-echo ">> Done. Artifacts in $OUT_DIR (dumps/, e2e-run.log); goldens in $GOLDEN_DIR"
+echo ">> Done. Artifacts in $OUT_DIR (dumps/, e2e-run.log${VAULT_MOUNT:+, ${VAULT_NAME:-}/}); goldens in $GOLDEN_DIR"

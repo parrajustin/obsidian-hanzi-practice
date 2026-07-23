@@ -1,5 +1,12 @@
 import {HistoryManager} from '../src/utils/history_manager';
-import {computeEntryId} from '../src/utils/practice_list';
+import {
+  CardType,
+  computeEntryId,
+  computeFlashcardId,
+  HANZI_BANK,
+  HanziEntry,
+  FlashcardEntry,
+} from '../src/utils/practice_list';
 import {App} from 'obsidian';
 import {FileUtil} from 'standard-obsidian-lib/src/filesystem/file_util';
 import {Ok} from 'standard-ts-lib/src/result';
@@ -15,6 +22,40 @@ const HAN_ID = computeEntryId('汉', 'han4');
 const YU_ID = computeEntryId('语', 'yu3');
 const HAO3_ID = computeEntryId('好', 'hao3');
 const HAO4_ID = computeEntryId('好', 'hao4');
+
+// Single-source setup: just the Hanzi bank stored in practice.md (most tests
+// only need that; multi-file bank routing has its own tests below).
+const HANZI_SOURCES = [{name: HANZI_BANK, filePath: 'practice.md'}];
+
+function hanziEntry(
+  character: string,
+  pinyin: string,
+  english = '',
+): HanziEntry {
+  return {
+    id: computeEntryId(character, pinyin),
+    cardType: CardType.HANZI,
+    bank: HANZI_BANK,
+    character,
+    pinyin,
+    english,
+  };
+}
+
+function flashcard(
+  bank: string,
+  front: string,
+  back: string,
+  cardType: FlashcardEntry['cardType'] = CardType.FLASHCARD,
+): FlashcardEntry {
+  return {
+    id: computeFlashcardId(bank, front, back),
+    cardType,
+    bank,
+    front,
+    back,
+  };
+}
 
 describe('HistoryManager', () => {
   let mockApp: App;
@@ -49,6 +90,22 @@ describe('HistoryManager', () => {
     expect(history[YU_ID][0].difficulty).toBe(3);
   });
 
+  it('parses history lines whose labels contain spaces (flashcards)', async () => {
+    const cardId = computeFlashcardId('Capitals', 'France', 'Paris');
+    const mockHistory = `
+- [1718712000000] ${cardId} What is the capital: of France? (Paris): 4
+`;
+    (FileUtil.fetchFile as jest.Mock).mockResolvedValue(
+      Ok(new TextEncoder().encode(mockHistory)),
+    );
+
+    const history = await HistoryManager.parseHistory(mockApp, 'history.md');
+
+    expect(history[cardId]).toBeDefined();
+    expect(history[cardId].length).toBe(1);
+    expect(history[cardId][0].difficulty).toBe(4);
+  });
+
   it('should parse legacy character-keyed history lines', async () => {
     const mockHistory = `
 - [1718712000000] 汉: 4
@@ -70,13 +127,21 @@ describe('HistoryManager', () => {
       [HAO3_ID]: [{timestamp: 300, difficulty: 5}],
       好: [{timestamp: 100, difficulty: 3}],
     };
-    const reviews = HistoryManager.reviewsForEntry(history, {
-      id: HAO3_ID,
-      character: '好',
-      pinyin: 'hao3',
-      english: 'good',
-    });
+    const reviews = HistoryManager.reviewsForEntry(
+      history,
+      hanziEntry('好', 'hao3', 'good'),
+    );
     expect(reviews.map(r => r.timestamp)).toEqual([100, 300]);
+  });
+
+  it('reviewsForEntry does NOT attribute legacy char reviews to flashcards', () => {
+    // A flashcard whose front happens to equal a legacy history key must not
+    // inherit that key's reviews — legacy lines were only ever hanzi.
+    const card = flashcard('Words', '好', 'good');
+    const history = {
+      好: [{timestamp: 100, difficulty: 3}],
+    };
+    expect(HistoryManager.reviewsForEntry(history, card)).toEqual([]);
   });
 
   it('appendResult writes the id AND the human-readable char/pinyin', async () => {
@@ -92,7 +157,7 @@ describe('HistoryManager', () => {
     await HistoryManager.appendResult(
       mockApp,
       'history.md',
-      {id: HAO3_ID, character: '好', pinyin: 'hao3', english: 'good'},
+      hanziEntry('好', 'hao3', 'good'),
       5,
     );
 
@@ -103,6 +168,31 @@ describe('HistoryManager', () => {
     );
     const history = await HistoryManager.parseHistory(mockApp, 'history.md');
     expect(history[HAO3_ID].length).toBe(1);
+  });
+
+  it('appendResult round-trips flashcard labels with spaces and parens', async () => {
+    (FileUtil.fetchFile as jest.Mock).mockResolvedValue(Ok(new Uint8Array(0)));
+    let written = '';
+    (FileUtil.writeToFile as jest.Mock).mockImplementation(
+      (_app: App, _path: string, data: Uint8Array) => {
+        written = new TextDecoder().decode(data);
+        return Promise.resolve(Ok(undefined));
+      },
+    );
+
+    const card = flashcard(
+      'Capitals',
+      'Capital of France (in Europe)?',
+      'Paris',
+    );
+    await HistoryManager.appendResult(mockApp, 'history.md', card, 2);
+
+    (FileUtil.fetchFile as jest.Mock).mockResolvedValue(
+      Ok(new TextEncoder().encode(written)),
+    );
+    const history = await HistoryManager.parseHistory(mockApp, 'history.md');
+    expect(history[card.id].length).toBe(1);
+    expect(history[card.id][0].difficulty).toBe(2);
   });
 
   it('should calculate next due entry', async () => {
@@ -126,15 +216,83 @@ describe('HistoryManager', () => {
     const nextEntry = await HistoryManager.getNextDueEntry(
       mockApp,
       'history.md',
-      'practice.md',
+      HANZI_SOURCES,
+      HANZI_BANK,
     );
 
     // "语" and "试" have no reviews, meaning SpacedRepetition gives them today - 1.
     // "汉" is very old, due extremely far in the past.
     // The most overdue should be picked.
 
-    expect(nextEntry?.character).toBe('汉');
     expect(nextEntry?.id).toBe(HAN_ID);
+  });
+
+  it('getNextDueEntry routes each bank to its own file', async () => {
+    const capital = flashcard('Capitals', 'France', 'Paris');
+    const sources = [
+      ...HANZI_SOURCES,
+      {name: 'Capitals', filePath: 'capitals.md'},
+    ];
+    // The Capitals line carries a WRONG bank tag: the file a card lives in
+    // must decide its bank (files can be renamed/repurposed in settings).
+    const files: Record<string, string> = {
+      'practice.md': '汉\than4\tChinese',
+      'capitals.md': `France\tParis\t\t${capital.id}\t1\tWrongTag`,
+    };
+    // Mock by path (not by call order): an unknown bank short-circuits
+    // before the history file is ever read, so once-queues would desync.
+    (FileUtil.fetchFile as jest.Mock).mockImplementation(
+      (_app: App, path: string) =>
+        Promise.resolve(Ok(new TextEncoder().encode(files[path] ?? ''))),
+    );
+
+    const hanziNext = await HistoryManager.getNextDueEntry(
+      mockApp,
+      'history.md',
+      sources,
+      HANZI_BANK,
+    );
+    expect(hanziNext?.id).toBe(HAN_ID);
+
+    const capitalsNext = await HistoryManager.getNextDueEntry(
+      mockApp,
+      'history.md',
+      sources,
+      'Capitals',
+    );
+    expect(capitalsNext).toEqual(capital);
+
+    const unknownBank = await HistoryManager.getNextDueEntry(
+      mockApp,
+      'history.md',
+      sources,
+      'Nope',
+    );
+    expect(unknownBank).toBeNull();
+  });
+
+  it('legacy bank-tagged lines in the Hanzi file stay practicable', async () => {
+    // Before per-bank files, every bank's cards lived in the Hanzi words
+    // file with a bank tag on the line. Those lines keep their tag.
+    const capital = flashcard('Capitals', 'France', 'Paris');
+    const files: Record<string, string> = {
+      'practice.md': [
+        '汉\than4\tChinese',
+        `France\tParis\t\t${capital.id}\t1\tCapitals`,
+      ].join('\n'),
+    };
+    (FileUtil.fetchFile as jest.Mock).mockImplementation(
+      (_app: App, path: string) =>
+        Promise.resolve(Ok(new TextEncoder().encode(files[path] ?? ''))),
+    );
+
+    const capitalsNext = await HistoryManager.getNextDueEntry(
+      mockApp,
+      'history.md',
+      HANZI_SOURCES,
+      'Capitals',
+    );
+    expect(capitalsNext).toEqual(capital);
   });
 
   it('schedules senses of the same character independently', async () => {
@@ -159,11 +317,11 @@ describe('HistoryManager', () => {
     const nextEntry = await HistoryManager.getNextDueEntry(
       mockApp,
       'history.md',
-      'practice.md',
+      HANZI_SOURCES,
+      HANZI_BANK,
     );
 
     expect(nextEntry?.id).toBe(HAO4_ID);
-    expect(nextEntry?.pinyin).toBe('hao4');
   });
 
   it('averageScore is 0 for unreviewed entries and the mean otherwise', () => {
@@ -197,11 +355,11 @@ describe('HistoryManager', () => {
     const mixUp = await HistoryManager.getMixUpEntry(
       mockApp,
       'history.md',
-      'practice.md',
-      {id: HAO3_ID, character: '好', pinyin: 'hao3', english: 'good'},
+      HANZI_SOURCES,
+      hanziEntry('好', 'hao3', 'good'),
     );
 
-    expect(mixUp?.character).toBe('汉');
+    expect(mixUp && !('front' in mixUp) ? mixUp.character : null).toBe('汉');
   });
 
   it('getMixUpEntry never returns another sense of the same character', async () => {
@@ -217,8 +375,8 @@ describe('HistoryManager', () => {
     const mixUp = await HistoryManager.getMixUpEntry(
       mockApp,
       'history.md',
-      'practice.md',
-      {id: HAO3_ID, character: '好', pinyin: 'hao3', english: 'good'},
+      HANZI_SOURCES,
+      hanziEntry('好', 'hao3', 'good'),
     );
 
     expect(mixUp).toBeNull();
@@ -242,10 +400,20 @@ describe('HistoryManager', () => {
     const mixUp = await HistoryManager.getMixUpEntry(
       mockApp,
       'history.md',
-      'practice.md',
-      {id: HAO3_ID, character: '好', pinyin: 'hao3', english: 'good'},
+      HANZI_SOURCES,
+      hanziEntry('好', 'hao3', 'good'),
     );
 
+    expect(mixUp).toBeNull();
+  });
+
+  it('getMixUpEntry returns null for flashcards', async () => {
+    const mixUp = await HistoryManager.getMixUpEntry(
+      mockApp,
+      'history.md',
+      HANZI_SOURCES,
+      flashcard('Capitals', 'France', 'Paris'),
+    );
     expect(mixUp).toBeNull();
   });
 
@@ -273,7 +441,8 @@ describe('HistoryManager', () => {
     const nextEntry = await HistoryManager.getNextDueEntry(
       mockApp,
       'history.md',
-      'practice.md',
+      HANZI_SOURCES,
+      HANZI_BANK,
     );
 
     expect(nextEntry?.id).toBe(HAO3_ID);

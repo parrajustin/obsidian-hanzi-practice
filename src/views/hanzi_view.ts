@@ -1,16 +1,35 @@
-import {ItemView, Notice, WorkspaceLeaf} from 'obsidian';
+import {ItemView, Notice, ViewStateResult, WorkspaceLeaf} from 'obsidian';
 import {HANZI_VIEW_TYPE} from '../main';
 
 import HanziPracticePlugin from '../main';
+import {bankSources} from '../settings';
 import {HistoryManager} from '../utils/history_manager';
 import {PinyinSelector} from '../components/pinyin_selector';
+import {FlashCard} from '../components/flash_card';
 import {HanziQuizWriter} from '../writer/quiz_writer';
-import {computeEntryId, PracticeEntry} from '../utils/practice_list';
+import {
+  CardType,
+  computeEntryId,
+  FlashcardEntry,
+  HANZI_BANK,
+  IsFlashcardEntry,
+  PracticeEntry,
+} from '../utils/practice_list';
 
+/**
+ * The practice view. One view instance practices one BANK (a named cluster of
+ * cards — the bank is view state, set by `activateView`), rendering whatever
+ * UI the due card's type needs: the stroke-drawing quiz for hanzi cards, a
+ * flip-and-self-grade card for (reversible) flashcards.
+ */
 export class HanziPracticeView extends ItemView {
   private writer: HanziQuizWriter | null = null;
-  /** The practice item (sense) being quizzed; history is keyed by its id. */
+  /** The practice item being quizzed; history is keyed by its id. */
   private currentEntry: PracticeEntry | null = null;
+  /** The bank this view is practicing. */
+  private bank: string = HANZI_BANK;
+  /** Whether onOpen has run (setState before that must not render). */
+  private opened = false;
   private currentCharacter = '汉';
   private targetPinyin = '';
   private englishDef = '';
@@ -30,17 +49,45 @@ export class HanziPracticeView extends ItemView {
   }
 
   getDisplayText() {
-    return 'Hanzi Practice';
+    return this.bank === HANZI_BANK
+      ? 'Hanzi Practice'
+      : `Practice: ${this.bank}`;
+  }
+
+  /** The bank travels as view state so reopening the tab keeps practicing it. */
+  override async setState(
+    state: unknown,
+    result: ViewStateResult,
+  ): Promise<void> {
+    await super.setState(state, result);
+    const bank = (state as {bank?: unknown} | null | undefined)?.bank;
+    if (typeof bank === 'string' && bank.length > 0 && bank !== this.bank) {
+      this.bank = bank;
+      if (this.opened) await this.loadNext();
+    }
+  }
+
+  override getState(): Record<string, unknown> {
+    return {bank: this.bank};
   }
 
   async onOpen() {
-    // Pick the next due character, then read its pinyin + definition straight
-    // from the practice list (they were cached there when the character was
-    // added). The heavy CEDICT dictionary is NOT loaded here.
+    this.opened = true;
+    await this.loadNext();
+  }
+
+  /**
+   * Pick the next due card of this view's bank and render it. For hanzi
+   * cards the pinyin + definition are read straight from the practice list
+   * (they were cached there when the character was added) — the heavy CEDICT
+   * dictionary is NOT loaded here.
+   */
+  private async loadNext() {
     const nextEntry = await HistoryManager.getNextDueEntry(
       this.plugin.app,
       this.plugin.settings.historyFilePath,
-      this.plugin.settings.practiceFilePath,
+      bankSources(this.plugin.settings),
+      this.bank,
     );
     await this.renderPractice(nextEntry);
   }
@@ -53,12 +100,28 @@ export class HanziPracticeView extends ItemView {
     this.writer = null;
     const container = this.containerEl.children[1];
     container.empty();
+    this.currentEntry = nextEntry;
+
+    if (nextEntry && IsFlashcardEntry(nextEntry)) {
+      this.renderFlashcard(container, nextEntry);
+      return;
+    }
+
+    // A non-hanzi bank with no cards has nothing to fall back to (the hanzi
+    // UI's default 汉 would be nonsense there).
+    if (!nextEntry && this.bank !== HANZI_BANK) {
+      container.createEl('h2', {text: `Practice: ${this.bank}`});
+      container.createEl('p', {
+        cls: 'practice-empty',
+        text: `No cards in the "${this.bank}" bank yet.`,
+      });
+      return;
+    }
 
     container.createEl('h2', {text: 'Practice Hanzi'});
 
     this.targetPinyin = '';
     this.englishDef = '';
-    this.currentEntry = nextEntry;
     if (nextEntry) {
       this.currentCharacter = nextEntry.character;
       this.targetPinyin = nextEntry.pinyin;
@@ -136,6 +199,36 @@ export class HanziPracticeView extends ItemView {
     btnMixUp.onclick = () => void this.handleMixUp();
   }
 
+  /**
+   * Flashcard practice: show the prompt side, flip, self-grade 0–5. A
+   * reversible card may show either side as the prompt.
+   */
+  private renderFlashcard(container: Element, entry: FlashcardEntry) {
+    container.createEl('h2', {text: `Practice: ${this.bank}`});
+
+    const reversed =
+      entry.cardType === CardType.REVERSIBLE_FLASHCARD && Math.random() < 0.5;
+    const card = new FlashCard(
+      container as HTMLElement,
+      reversed ? entry.back : entry.front,
+      reversed ? entry.front : entry.back,
+      score => {
+        void this.handleFlashcardGrade(entry, score);
+      },
+    );
+    card.render();
+  }
+
+  async handleFlashcardGrade(entry: FlashcardEntry, score: number) {
+    await HistoryManager.appendResult(
+      this.plugin.app,
+      this.plugin.settings.historyFilePath,
+      entry,
+      score,
+    );
+    await this.loadNext();
+  }
+
   startQuiz() {
     this.strokeMistakes = 0;
     this.pinyinMistakes = 0;
@@ -167,7 +260,7 @@ export class HanziPracticeView extends ItemView {
       ? await HistoryManager.getMixUpEntry(
           this.plugin.app,
           this.plugin.settings.historyFilePath,
-          this.plugin.settings.practiceFilePath,
+          bankSources(this.plugin.settings),
           this.currentEntry,
         )
       : null;
@@ -204,6 +297,8 @@ export class HanziPracticeView extends ItemView {
     // of the same character track their own review schedules.
     const entry: PracticeEntry = this.currentEntry ?? {
       id: computeEntryId(this.currentCharacter, this.targetPinyin),
+      cardType: CardType.HANZI,
+      bank: HANZI_BANK,
       character: this.currentCharacter,
       pinyin: this.targetPinyin,
       english: this.englishDef,
@@ -215,8 +310,8 @@ export class HanziPracticeView extends ItemView {
       finalScore,
     );
 
-    // Refresh view for next char
-    void this.onOpen();
+    // Refresh view for next card
+    void this.loadNext();
   }
 
   async onClose() {
