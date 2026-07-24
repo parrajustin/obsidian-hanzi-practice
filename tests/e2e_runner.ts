@@ -5,7 +5,11 @@ import * as zlib from 'zlib';
 import puppeteer, {type Page} from 'puppeteer-core';
 import {PNG} from 'pngjs';
 import pixelmatch from 'pixelmatch';
-import {computeFlashcardId} from '../src/utils/practice_list';
+import {
+  computeClozeId,
+  computeFlashcardId,
+  computeMultiChoiceId,
+} from '../src/utils/practice_list';
 
 // --- Mobile emulation ----------------------------------------------------
 // E2E_EMULATE_MOBILE=1 runs the whole flow with Obsidian's built-in mobile
@@ -1592,6 +1596,396 @@ async function run() {
     }
     console.log(
       'Verified reversible-card grade in history, keyed by id with stored front (back) label.',
+    );
+
+    // STEP 11: Multiple-choice card (type 3) — add one to Capitals via the
+    // card-type dropdown, then practice it: a wrong pick must be marked and
+    // counted, the correct pick completes and auto-grades (1 mistake → 2).
+    // Goldens: the shuffled options are DOM-sorted before each screenshot
+    // so the pixels are deterministic.
+    console.log('STEP 11: Adding a MULTIPLE-CHOICE card to Capitals...');
+    const mcOpened = await page.evaluate(() => {
+      return (window as any).app.commands.executeCommandById(
+        'hanzi-practice:add-flash-card',
+      );
+    });
+    if (!mcOpened) {
+      throw new Error(
+        'Command hanzi-practice:add-flash-card failed to execute (step 11)',
+      );
+    }
+    await page.waitForSelector('.modal .flash-type-dropdown', {
+      timeout: 10000,
+    });
+    await page.select('.modal .flash-bank-dropdown', '0'); // Capitals
+    await page.select('.modal .flash-type-dropdown', '3'); // Multiple choice
+    await delay(300);
+    // Switching the type swaps the field set: question/answer/wrong-options.
+    const mcAreas = await page.$$('.modal textarea');
+    if (mcAreas.length !== 3) {
+      throw new Error(
+        `Expected 3 textareas after selecting Multiple choice, found ${mcAreas.length}`,
+      );
+    }
+    await mcAreas[0].type('你__狗吗？');
+    await mcAreas[1].type('有没有');
+    // Distractors are one per line; set via input event so the newline can't
+    // be misread as a keyboard action.
+    await page.evaluate(() => {
+      const areas = document.querySelectorAll('.modal textarea');
+      const el = areas[2] as HTMLTextAreaElement;
+      el.value = '不有\n没不有';
+      el.dispatchEvent(new Event('input', {bubbles: true}));
+    });
+    // Notices fade on their own 5s timers — strip them before every golden
+    // (same determinism rule as the step9 screenshots).
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step11-add-mc');
+    await page.evaluate(() => {
+      const btn = document.querySelector(
+        '.modal button.mod-cta',
+      ) as HTMLElement | null;
+      if (btn) btn.click();
+    });
+    const mcId = computeMultiChoiceId('Capitals', '你__狗吗？', '有没有');
+    let mcLineOk = false;
+    for (let i = 0; i < 20; i++) {
+      const cards = fs.existsSync(capitalsMdPath)
+        ? fs.readFileSync(capitalsMdPath, 'utf-8')
+        : '';
+      // Card type 3; distractors |-joined in f2.
+      if (
+        cards.includes(`你__狗吗？\t有没有\t不有|没不有\t${mcId}\t3\tCapitals`)
+      ) {
+        mcLineOk = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!mcLineOk) {
+      throw new Error(
+        'Multiple-choice line (cardType 3, |-joined distractors) not written to capitals-cards.md',
+      );
+    }
+    console.log('Verified multiple-choice card (type 3) in capitals-cards.md.');
+    await page.keyboard.press('Escape');
+    await delay(500);
+
+    console.log('STEP 11b: Practicing the multiple-choice card...');
+    const mcPractice = await page.evaluate(() => {
+      return (window as any).app.commands.executeCommandById(
+        'hanzi-practice:practice',
+      );
+    });
+    if (!mcPractice) {
+      throw new Error('Command hanzi-practice:practice failed (step 11b)');
+    }
+    await page.waitForSelector('.modal .practice-bank-option', {
+      timeout: 10000,
+    });
+    await page.evaluate(() => {
+      const target = Array.from(
+        document.querySelectorAll('.modal .practice-bank-option'),
+      ).find(
+        b => b.querySelector('.practice-bank-name')?.textContent === 'Capitals',
+      );
+      (target as HTMLElement | undefined)?.click();
+    });
+    // The new card is the only strictly-due card in Capitals (the France
+    // flashcard was graded 4 in step 9c → due tomorrow), so it must show.
+    await page.waitForSelector('.mc-card', {timeout: 10000});
+    const mcState = await page.evaluate(() => {
+      const question = document.querySelector(
+        '.mc-question',
+      ) as HTMLElement | null;
+      const options = Array.from(
+        document.querySelectorAll('.mc-option'),
+      ) as HTMLElement[];
+      return {
+        question: question?.textContent ?? null,
+        options: options.map(o => o.textContent),
+      };
+    });
+    if (
+      mcState.question !== '你__狗吗？' ||
+      mcState.options.length !== 3 ||
+      [...mcState.options].sort().join(',') !==
+        ['有没有', '不有', '没不有'].sort().join(',')
+    ) {
+      throw new Error(
+        `Multiple-choice card state wrong: ${JSON.stringify(mcState)}`,
+      );
+    }
+    // The options render Fisher-Yates shuffled, which would flake a pixel
+    // golden — reorder the buttons deterministically (by text) in the DOM
+    // before screenshotting. Handlers travel with the elements, so the
+    // interaction assertions below are unaffected.
+    await page.evaluate(() => {
+      const container = document.querySelector('.mc-options');
+      if (!container) return;
+      Array.from(container.querySelectorAll('.mc-option'))
+        .sort((a, b) =>
+          (a.textContent ?? '').localeCompare(b.textContent ?? '', 'zh'),
+        )
+        .forEach(b => container.appendChild(b));
+    });
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step11-mc-options');
+    // Pick a WRONG option first: it must be marked + disabled, and the card
+    // must not complete.
+    const wrongMarked = await page.evaluate(() => {
+      const wrong = Array.from(document.querySelectorAll('.mc-option')).find(
+        b => b.textContent === '不有',
+      ) as HTMLButtonElement | undefined;
+      if (!wrong) return null;
+      wrong.click();
+      return {
+        disabled: wrong.disabled,
+        border: wrong.style.border,
+        completed: !document.querySelector('.mc-card'),
+      };
+    });
+    if (
+      !wrongMarked ||
+      !wrongMarked.disabled ||
+      !wrongMarked.border.includes('red') ||
+      wrongMarked.completed
+    ) {
+      throw new Error(
+        `Wrong-pick handling broken: ${JSON.stringify(wrongMarked)}`,
+      );
+    }
+    console.log('Verified wrong pick is marked, counted, and non-final.');
+    // Options are still in the sorted order from the previous golden, so the
+    // red-marked wrong pick is pixel-stable too.
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step11-mc-wrong-pick');
+    // Now the correct option: completes the card and auto-grades it. One
+    // wrong pick → score 2 (fail — the card comes back today).
+    await page.evaluate(() => {
+      const correct = Array.from(document.querySelectorAll('.mc-option')).find(
+        b => b.textContent === '有没有',
+      ) as HTMLElement | undefined;
+      correct?.click();
+    });
+    let mcHistoryOk = false;
+    for (let i = 0; i < 20; i++) {
+      const history = fs.existsSync(historyMdPath)
+        ? fs.readFileSync(historyMdPath, 'utf-8')
+        : '';
+      if (history.includes(`${mcId} 你__狗吗？ (有没有): 2`)) {
+        mcHistoryOk = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!mcHistoryOk) {
+      throw new Error(
+        'Multiple-choice card did not auto-grade 2 after one wrong pick',
+      );
+    }
+    console.log('Verified auto-grade (1 mistake → 2) written to history.');
+    // Score 2 = fail → the card is due again immediately; the view advances
+    // back to it.
+    await page.waitForSelector('.mc-card', {timeout: 10000});
+    await dump(page, 'step11-mc-regraded');
+
+    // STEP 12: Cloze card (type 4) — the sentence's {{…}} answers render as
+    // blanks, reveal shows the full sentence, then self-grade like a
+    // flashcard.
+    console.log('STEP 12: Adding a CLOZE card to the German bank...');
+    const clozeOpened = await page.evaluate(() => {
+      return (window as any).app.commands.executeCommandById(
+        'hanzi-practice:add-flash-card',
+      );
+    });
+    if (!clozeOpened) {
+      throw new Error(
+        'Command hanzi-practice:add-flash-card failed to execute (step 12)',
+      );
+    }
+    await page.waitForSelector('.modal .flash-type-dropdown', {
+      timeout: 10000,
+    });
+    await page.select('.modal .flash-bank-dropdown', '1'); // German
+    await page.select('.modal .flash-type-dropdown', '4'); // Fill in the blank
+    await delay(300);
+    const clozeAreas = await page.$$('.modal textarea');
+    if (clozeAreas.length !== 2) {
+      throw new Error(
+        `Expected 2 textareas after selecting Fill in the blank, found ${clozeAreas.length}`,
+      );
+    }
+    await clozeAreas[0].type('我一个星期{{没}}吃饭。');
+    await clozeAreas[1].type("I haven't eaten for a week.");
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step12-add-cloze');
+    await page.evaluate(() => {
+      const btn = document.querySelector(
+        '.modal button.mod-cta',
+      ) as HTMLElement | null;
+      if (btn) btn.click();
+    });
+    const clozeId = computeClozeId('German', '我一个星期{{没}}吃饭。');
+    let clozeLineOk = false;
+    for (let i = 0; i < 20; i++) {
+      const cards = fs.existsSync(germanMdPath)
+        ? fs.readFileSync(germanMdPath, 'utf-8')
+        : '';
+      // Card type 4: text, hint, empty f2.
+      if (
+        cards.includes(
+          `我一个星期{{没}}吃饭。\tI haven't eaten for a week.\t\t${clozeId}\t4\tGerman`,
+        )
+      ) {
+        clozeLineOk = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!clozeLineOk) {
+      throw new Error('Cloze line (cardType 4) not written to german-cards.md');
+    }
+    console.log('Verified cloze card (type 4) in german-cards.md.');
+    await page.keyboard.press('Escape');
+    await delay(500);
+
+    console.log('STEP 12b: Practicing the cloze card...');
+    const clozePractice = await page.evaluate(() => {
+      return (window as any).app.commands.executeCommandById(
+        'hanzi-practice:practice',
+      );
+    });
+    if (!clozePractice) {
+      throw new Error('Command hanzi-practice:practice failed (step 12b)');
+    }
+    await page.waitForSelector('.modal .practice-bank-option', {
+      timeout: 10000,
+    });
+    await page.evaluate(() => {
+      const target = Array.from(
+        document.querySelectorAll('.modal .practice-bank-option'),
+      ).find(
+        b => b.querySelector('.practice-bank-name')?.textContent === 'German',
+      );
+      (target as HTMLElement | undefined)?.click();
+    });
+    // The cloze card is the only strictly-due card in German (dog was graded
+    // 5 in step 10 → due tomorrow), so it must show, blanked.
+    await page.waitForSelector('.cloze-card', {timeout: 10000});
+    const clozePromptState = await page.evaluate(() => {
+      const prompt = document.querySelector(
+        '.cloze-prompt',
+      ) as HTMLElement | null;
+      const hint = document.querySelector('.cloze-hint') as HTMLElement | null;
+      const answer = document.querySelector(
+        '.cloze-answer',
+      ) as HTMLElement | null;
+      const grades = document.querySelector(
+        '.cloze-grades',
+      ) as HTMLElement | null;
+      return {
+        prompt: prompt?.textContent ?? null,
+        hint: hint?.textContent ?? null,
+        answerHidden: answer ? answer.style.display === 'none' : false,
+        gradesHidden: grades ? grades.style.display === 'none' : false,
+      };
+    });
+    if (
+      clozePromptState.prompt !== '我一个星期____吃饭。' ||
+      clozePromptState.hint !== "I haven't eaten for a week." ||
+      !clozePromptState.answerHidden ||
+      !clozePromptState.gradesHidden
+    ) {
+      throw new Error(
+        `Cloze prompt state wrong (blank must hide 没): ${JSON.stringify(clozePromptState)}`,
+      );
+    }
+    console.log('Verified the {{…}} answer renders blanked with the hint.');
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step12-cloze-prompt');
+    await page.click('.cloze-reveal');
+    const clozeRevealed = await page.evaluate(() => {
+      const answer = document.querySelector(
+        '.cloze-answer',
+      ) as HTMLElement | null;
+      const grades = Array.from(
+        document.querySelectorAll('.cloze-grade'),
+      ) as HTMLElement[];
+      return {
+        answer: answer?.textContent ?? null,
+        answerVisible: answer ? answer.style.display !== 'none' : false,
+        gradeLabels: grades.map(g => g.textContent),
+        gradeScores: grades.map(g => g.dataset.score),
+      };
+    });
+    if (
+      clozeRevealed.answer !== '我一个星期没吃饭。' ||
+      !clozeRevealed.answerVisible ||
+      clozeRevealed.gradeLabels.join(',') !==
+        'Very Easy,Easy,Hard,Very Hard,No Idea' ||
+      clozeRevealed.gradeScores.join(',') !== '5,4,3,2,0'
+    ) {
+      throw new Error(
+        `Cloze reveal state wrong: ${JSON.stringify(clozeRevealed)}`,
+      );
+    }
+    console.log('Verified reveal shows the full sentence + 5 grade buttons.');
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step12-cloze-revealed');
+    await page.evaluate(() => {
+      const hard = Array.from(document.querySelectorAll('.cloze-grade')).find(
+        b => (b as HTMLElement).dataset.score === '3',
+      );
+      (hard as HTMLElement | undefined)?.click();
+    });
+    let clozeHistoryOk = false;
+    for (let i = 0; i < 20; i++) {
+      const history = fs.existsSync(historyMdPath)
+        ? fs.readFileSync(historyMdPath, 'utf-8')
+        : '';
+      // The label flattens {{没}} to [没] for readability.
+      if (
+        history.includes(
+          `${clozeId} 我一个星期[没]吃饭。 (I haven't eaten for a week.): 3`,
+        )
+      ) {
+        clozeHistoryOk = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!clozeHistoryOk) {
+      throw new Error(
+        'Graded cloze card did not append its id-keyed history line',
+      );
+    }
+    console.log(
+      'Verified cloze grade in history with the bracket-flattened label.',
     );
 
     log('E2E steps complete!');

@@ -10,7 +10,10 @@ import {
   entryLabel,
   HANZI_BANK,
   HanziEntry,
+  IsClozeEntry,
   IsFlashcardEntry,
+  IsHanziEntry,
+  IsMultiChoiceEntry,
   PracticeEntry,
   parsePracticeList,
 } from './practice_list';
@@ -37,6 +40,12 @@ const LEGACY_HISTORY_LINE_REGEX = /- \[(\d+)\] (.*?): (\d+)/;
 function isPracticable(entry: PracticeEntry): boolean {
   if (IsFlashcardEntry(entry)) {
     return entry.front.length > 0;
+  }
+  if (IsMultiChoiceEntry(entry)) {
+    return entry.question.length > 0 && entry.answer.length > 0;
+  }
+  if (IsClozeEntry(entry)) {
+    return entry.text.length > 0;
   }
   // The drawing quiz models exactly one hanzi at a time.
   return entry.character.length === 1;
@@ -176,9 +185,8 @@ export class HistoryManager {
     history: Record<string, Review[]>,
     entry: PracticeEntry,
   ): Review[] {
-    const legacy = IsFlashcardEntry(entry)
-      ? []
-      : (history[entry.character] ?? []);
+    // Legacy character-keyed lines predate every non-hanzi card type.
+    const legacy = IsHanziEntry(entry) ? (history[entry.character] ?? []) : [];
     const reviews = [...(history[entry.id] ?? []), ...legacy];
     return reviews.sort((a, b) => a.timestamp - b.timestamp);
   }
@@ -207,7 +215,7 @@ export class HistoryManager {
     sources: BankSource[],
     current: PracticeEntry,
   ): Promise<PracticeEntry | null> {
-    if (IsFlashcardEntry(current)) return null;
+    if (!IsHanziEntry(current)) return null;
     const allEntries = await this.loadAllPracticeEntries(app, sources);
     const entries = allEntries.filter(
       (e): e is HanziEntry =>

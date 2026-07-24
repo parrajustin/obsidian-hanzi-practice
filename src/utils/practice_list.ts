@@ -14,6 +14,10 @@
  *     view opens, pinyin + definition are looked up ONCE when the character
  *     is added and cached on the line.
  *   - Flashcard (1) and reversible flashcard (2): front, back, (unused).
+ *   - Multiple choice (3): question, correct answer, distractors joined by
+ *     `|` (option text is sanitized so it can never contain `|`).
+ *   - Cloze / fill-in-the-blank (4): sentence with each answer wrapped in
+ *     `{{…}}`, optional hint/translation, (unused).
  *
  * Older hanzi lines are still parsed: 4-field lines (no cardType/bank),
  * 3-field lines (no id — derived), and plain single-character lines (the
@@ -33,6 +37,10 @@ export enum CardType {
   FLASHCARD = 1,
   /** Like FLASHCARD but either side may be shown as the prompt. */
   REVERSIBLE_FLASHCARD = 2,
+  /** Pick the correct answer among shuffled distractors; auto-graded. */
+  MULTIPLE_CHOICE = 3,
+  /** Sentence with {{blanked}} words: recall, reveal, self-grade. */
+  CLOZE = 4,
 }
 
 /** The bank every hanzi card belongs to. */
@@ -71,7 +79,24 @@ export interface FlashcardEntry extends BaseEntry {
   back: string;
 }
 
-export type PracticeEntry = HanziEntry | FlashcardEntry;
+export interface MultiChoiceEntry extends BaseEntry {
+  cardType: CardType.MULTIPLE_CHOICE;
+  question: string;
+  answer: string;
+  /** Wrong options shown shuffled alongside the answer. Never contain `|`. */
+  distractors: string[];
+}
+
+export interface ClozeEntry extends BaseEntry {
+  cardType: CardType.CLOZE;
+  /** The sentence, with each blanked-out answer wrapped in `{{…}}`. */
+  text: string;
+  /** Optional hint/translation shown alongside the blanked prompt. */
+  hint: string;
+}
+
+export type PracticeEntry =
+  HanziEntry | FlashcardEntry | MultiChoiceEntry | ClozeEntry;
 
 /**
  * Type guard for the two flashcard variants. Written so that entries with a
@@ -85,6 +110,24 @@ export function IsFlashcardEntry(
     entry.cardType === CardType.FLASHCARD ||
     entry.cardType === CardType.REVERSIBLE_FLASHCARD
   );
+}
+
+export function IsHanziEntry(entry: PracticeEntry): entry is HanziEntry {
+  return (
+    !IsFlashcardEntry(entry) &&
+    entry.cardType !== CardType.MULTIPLE_CHOICE &&
+    entry.cardType !== CardType.CLOZE
+  );
+}
+
+export function IsMultiChoiceEntry(
+  entry: PracticeEntry,
+): entry is MultiChoiceEntry {
+  return entry.cardType === CardType.MULTIPLE_CHOICE;
+}
+
+export function IsClozeEntry(entry: PracticeEntry): entry is ClozeEntry {
+  return entry.cardType === CardType.CLOZE;
 }
 
 const FIELD_SEP = '\t';
@@ -123,12 +166,66 @@ export function computeFlashcardId(
   return computeCardId([bank, front, back]);
 }
 
+/** Stable id for a multiple-choice card (distractors may be edited freely). */
+export function computeMultiChoiceId(
+  bank: string,
+  question: string,
+  answer: string,
+): string {
+  return computeCardId([bank, question, answer]);
+}
+
+/** Stable id for a cloze card: the blanked sentence IS the card. */
+export function computeClozeId(bank: string, text: string): string {
+  return computeCardId([bank, text]);
+}
+
 /**
  * Field values live on a single tab-separated line, so tabs/newlines inside
  * user text (flashcard fronts/backs, bank names) are collapsed to spaces.
  */
 export function sanitizeField(value: string): string {
   return value.replace(/[\t\r\n]+/g, ' ').trim();
+}
+
+/** Separator joining a multiple-choice card's distractors inside field f2. */
+const DISTRACTOR_SEP = '|';
+
+/**
+ * Multiple-choice option text (answer + distractors) additionally may never
+ * contain the distractor separator, or the stored list would split wrong.
+ */
+export function sanitizeOption(value: string): string {
+  return sanitizeField(value.replace(/\|/g, '/'));
+}
+
+/** One run of a cloze sentence: either literal text or a blanked answer. */
+export interface ClozeSegment {
+  text: string;
+  blank: boolean;
+}
+
+/**
+ * Split a cloze sentence into literal and `{{blank}}` segments. A sentence
+ * with no `{{…}}` markers yields one literal segment (the card then behaves
+ * like a front-only flashcard — harmless, but the add-modal requires at
+ * least one blank so it can't be authored by accident).
+ */
+export function parseClozeSegments(text: string): ClozeSegment[] {
+  const segments: ClozeSegment[] = [];
+  const regex = /\{\{(.*?)\}\}/g;
+  let last = 0;
+  for (let match = regex.exec(text); match; match = regex.exec(text)) {
+    if (match.index > last) {
+      segments.push({text: text.slice(last, match.index), blank: false});
+    }
+    segments.push({text: match[1], blank: true});
+    last = regex.lastIndex;
+  }
+  if (last < text.length || segments.length === 0) {
+    segments.push({text: text.slice(last), blank: false});
+  }
+  return segments;
 }
 
 /** Parse the whole practice-list file text into structured entries. */
@@ -149,11 +246,33 @@ export function parsePracticeList(text: string): PracticeEntry[] {
     // still shows up (and can be removed) in an older one.
     const cardType =
       cardTypeRaw === CardType.FLASHCARD ||
-      cardTypeRaw === CardType.REVERSIBLE_FLASHCARD
+      cardTypeRaw === CardType.REVERSIBLE_FLASHCARD ||
+      cardTypeRaw === CardType.MULTIPLE_CHOICE ||
+      cardTypeRaw === CardType.CLOZE
         ? cardTypeRaw
         : CardType.HANZI;
     const bank = (parts[5] ?? '').trim() || HANZI_BANK;
-    if (cardType === CardType.HANZI) {
+    if (cardType === CardType.MULTIPLE_CHOICE) {
+      entries.push({
+        id: id || computeMultiChoiceId(bank, f0, f1),
+        cardType,
+        bank,
+        question: f0,
+        answer: f1,
+        distractors: f2
+          .split(DISTRACTOR_SEP)
+          .map(d => d.trim())
+          .filter(d => d.length > 0),
+      });
+    } else if (cardType === CardType.CLOZE) {
+      entries.push({
+        id: id || computeClozeId(bank, f0),
+        cardType,
+        bank,
+        text: f0,
+        hint: f1,
+      });
+    } else if (cardType === CardType.HANZI) {
       entries.push({
         // Older lines predate the id field — derive it so every entry has one.
         id: id || computeEntryId(f0, f1),
@@ -185,6 +304,31 @@ export function formatPracticeEntry(entry: PracticeEntry): string {
     const id = entry.id || computeFlashcardId(bank, front, back);
     return [front, back, '', id, String(entry.cardType), bank].join(FIELD_SEP);
   }
+  if (IsMultiChoiceEntry(entry)) {
+    const question = sanitizeField(entry.question);
+    const answer = sanitizeOption(entry.answer);
+    const distractors = entry.distractors
+      .map(sanitizeOption)
+      .filter(d => d.length > 0)
+      .join(DISTRACTOR_SEP);
+    const bank = sanitizeField(entry.bank);
+    const id = entry.id || computeMultiChoiceId(bank, question, answer);
+    return [
+      question,
+      answer,
+      distractors,
+      id,
+      String(entry.cardType),
+      bank,
+    ].join(FIELD_SEP);
+  }
+  if (IsClozeEntry(entry)) {
+    const text = sanitizeField(entry.text);
+    const hint = sanitizeField(entry.hint);
+    const bank = sanitizeField(entry.bank);
+    const id = entry.id || computeClozeId(bank, text);
+    return [text, hint, '', id, String(entry.cardType), bank].join(FIELD_SEP);
+  }
   const id = entry.id || computeEntryId(entry.character, entry.pinyin);
   return [
     entry.character,
@@ -205,6 +349,22 @@ export function entryLabel(entry: PracticeEntry): string {
     return `${truncate(sanitizeField(entry.front))} (${truncate(
       sanitizeField(entry.back),
     )})`;
+  }
+  if (IsMultiChoiceEntry(entry)) {
+    return `${truncate(sanitizeField(entry.question))} (${truncate(
+      sanitizeOption(entry.answer),
+    )})`;
+  }
+  if (IsClozeEntry(entry)) {
+    // {{答案}} → [答案]: readable in history without the marker noise.
+    const flattened = sanitizeField(entry.text).replace(
+      /\{\{(.*?)\}\}/g,
+      '[$1]',
+    );
+    const hint = sanitizeField(entry.hint);
+    return hint
+      ? `${truncate(flattened)} (${truncate(hint)})`
+      : truncate(flattened);
   }
   return `${entry.character} (${entry.pinyin})`;
 }

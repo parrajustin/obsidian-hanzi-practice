@@ -1,12 +1,17 @@
 import {
   CardType,
+  computeClozeId,
   computeEntryId,
   computeFlashcardId,
+  computeMultiChoiceId,
+  entryLabel,
   formatPracticeEntry,
   HANZI_BANK,
   listBanks,
+  parseClozeSegments,
   parsePracticeList,
   sanitizeField,
+  sanitizeOption,
 } from '../src/utils/practice_list';
 
 describe('computeEntryId', () => {
@@ -99,6 +104,43 @@ describe('parsePracticeList', () => {
     expect(entries).toHaveLength(1);
     expect(entries[0].cardType).toBe(CardType.HANZI);
   });
+
+  it('parses multiple-choice lines, splitting distractors on |', () => {
+    const entries = parsePracticeList(
+      '你__狗吗？\t有没有\t不有|没不有\tdeadbeef\t3\tGrammar',
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual({
+      id: 'deadbeef',
+      cardType: CardType.MULTIPLE_CHOICE,
+      bank: 'Grammar',
+      question: '你__狗吗？',
+      answer: '有没有',
+      distractors: ['不有', '没不有'],
+    });
+  });
+
+  it('parses a multiple-choice line with an empty distractor field', () => {
+    const entries = parsePracticeList('Q\tA\t\tdeadbeef\t3\tGrammar');
+    expect(entries[0]).toMatchObject({
+      cardType: CardType.MULTIPLE_CHOICE,
+      distractors: [],
+    });
+  });
+
+  it('parses cloze lines with text and hint', () => {
+    const entries = parsePracticeList(
+      "我一个星期{{没}}吃饭。\tI haven't eaten for a week.\t\tdeadbeef\t4\tCloze",
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual({
+      id: 'deadbeef',
+      cardType: CardType.CLOZE,
+      bank: 'Cloze',
+      text: '我一个星期{{没}}吃饭。',
+      hint: "I haven't eaten for a week.",
+    });
+  });
 });
 
 describe('formatPracticeEntry', () => {
@@ -147,6 +189,59 @@ describe('formatPracticeEntry', () => {
     expect(formatPracticeEntry(entry)).toBe(line);
   });
 
+  it('round-trips multiple-choice cards through parse', () => {
+    const line = formatPracticeEntry({
+      id: '',
+      cardType: CardType.MULTIPLE_CHOICE,
+      bank: 'Grammar',
+      question: '你__狗吗？',
+      answer: '有没有',
+      distractors: ['不有', '没不有'],
+    });
+    const [entry] = parsePracticeList(line);
+    expect(entry).toEqual({
+      id: computeMultiChoiceId('Grammar', '你__狗吗？', '有没有'),
+      cardType: CardType.MULTIPLE_CHOICE,
+      bank: 'Grammar',
+      question: '你__狗吗？',
+      answer: '有没有',
+      distractors: ['不有', '没不有'],
+    });
+    expect(formatPracticeEntry(entry)).toBe(line);
+  });
+
+  it('keeps | out of multiple-choice option text so the list splits right', () => {
+    const line = formatPracticeEntry({
+      id: '',
+      cardType: CardType.MULTIPLE_CHOICE,
+      bank: 'Grammar',
+      question: 'pick',
+      answer: 'a|b',
+      distractors: ['c|d', ''],
+    });
+    const [entry] = parsePracticeList(line);
+    expect(entry).toMatchObject({answer: 'a/b', distractors: ['c/d']});
+  });
+
+  it('round-trips cloze cards through parse', () => {
+    const line = formatPracticeEntry({
+      id: '',
+      cardType: CardType.CLOZE,
+      bank: 'Cloze',
+      text: '我一个星期{{没}}吃饭。',
+      hint: "I haven't eaten for a week.",
+    });
+    const [entry] = parsePracticeList(line);
+    expect(entry).toEqual({
+      id: computeClozeId('Cloze', '我一个星期{{没}}吃饭。'),
+      cardType: CardType.CLOZE,
+      bank: 'Cloze',
+      text: '我一个星期{{没}}吃饭。',
+      hint: "I haven't eaten for a week.",
+    });
+    expect(formatPracticeEntry(entry)).toBe(line);
+  });
+
   it('collapses tabs and newlines in flashcard text (line format survives)', () => {
     const line = formatPracticeEntry({
       id: '',
@@ -167,6 +262,74 @@ describe('formatPracticeEntry', () => {
 describe('sanitizeField', () => {
   it('collapses tabs, CRs and newlines to single spaces and trims', () => {
     expect(sanitizeField('  a\tb\r\nc  ')).toBe('a b c');
+  });
+});
+
+describe('sanitizeOption', () => {
+  it('replaces | (the distractor separator) and collapses whitespace', () => {
+    expect(sanitizeOption(' a|b\tc ')).toBe('a/b c');
+  });
+});
+
+describe('parseClozeSegments', () => {
+  it('splits literal text and {{blank}} runs in order', () => {
+    expect(parseClozeSegments('我一个星期{{没}}吃饭。')).toEqual([
+      {text: '我一个星期', blank: false},
+      {text: '没', blank: true},
+      {text: '吃饭。', blank: false},
+    ]);
+  });
+
+  it('handles multiple blanks and blanks at the edges', () => {
+    expect(parseClozeSegments('{{如果}}你有时间，{{就}}来')).toEqual([
+      {text: '如果', blank: true},
+      {text: '你有时间，', blank: false},
+      {text: '就', blank: true},
+      {text: '来', blank: false},
+    ]);
+  });
+
+  it('returns one literal segment when there is no blank', () => {
+    expect(parseClozeSegments('没有空')).toEqual([
+      {text: '没有空', blank: false},
+    ]);
+    expect(parseClozeSegments('')).toEqual([{text: '', blank: false}]);
+  });
+});
+
+describe('entryLabel', () => {
+  it('labels multiple-choice cards as question (answer)', () => {
+    expect(
+      entryLabel({
+        id: 'deadbeef',
+        cardType: CardType.MULTIPLE_CHOICE,
+        bank: 'Grammar',
+        question: '你__狗吗？',
+        answer: '有没有',
+        distractors: ['不有'],
+      }),
+    ).toBe('你__狗吗？ (有没有)');
+  });
+
+  it('labels cloze cards with the blanks in brackets plus the hint', () => {
+    expect(
+      entryLabel({
+        id: 'deadbeef',
+        cardType: CardType.CLOZE,
+        bank: 'Cloze',
+        text: '我一个星期{{没}}吃饭。',
+        hint: 'duration before negation',
+      }),
+    ).toBe('我一个星期[没]吃饭。 (duration before negation)');
+    expect(
+      entryLabel({
+        id: 'deadbeef',
+        cardType: CardType.CLOZE,
+        bank: 'Cloze',
+        text: '四{{个}}月',
+        hint: '',
+      }),
+    ).toBe('四[个]月');
   });
 });
 

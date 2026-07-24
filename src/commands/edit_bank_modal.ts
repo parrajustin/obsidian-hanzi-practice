@@ -7,7 +7,10 @@ import {
   entryLabel,
   formatPracticeEntry,
   HANZI_BANK,
+  IsClozeEntry,
   IsFlashcardEntry,
+  IsHanziEntry,
+  IsMultiChoiceEntry,
   parsePracticeList,
   PracticeEntry,
 } from '../utils/practice_list';
@@ -112,7 +115,50 @@ export class EditBankModal extends Modal {
     row.style.padding = '6px 4px';
     row.style.borderBottom = '1px solid var(--background-modifier-border)';
 
-    if (IsFlashcardEntry(entry)) {
+    if (IsMultiChoiceEntry(entry)) {
+      // Question + answer, mirroring the flashcard front/back layout.
+      const questionEl = row.createEl('span', {
+        cls: 'mc-bank-question',
+        text: entry.question,
+      });
+      questionEl.style.flex = '1';
+      questionEl.style.overflow = 'hidden';
+      questionEl.style.textOverflow = 'ellipsis';
+      questionEl.style.whiteSpace = 'nowrap';
+      questionEl.title = entry.question;
+
+      const answerEl = row.createEl('span', {
+        cls: 'mc-bank-answer',
+        text: entry.answer,
+      });
+      answerEl.style.flex = '1';
+      answerEl.style.overflow = 'hidden';
+      answerEl.style.textOverflow = 'ellipsis';
+      answerEl.style.whiteSpace = 'nowrap';
+      answerEl.style.color = 'var(--text-muted)';
+      answerEl.title = `${entry.answer} · wrong: ${entry.distractors.join(', ')}`;
+    } else if (IsClozeEntry(entry)) {
+      const textEl = row.createEl('span', {
+        cls: 'cloze-bank-text',
+        text: entry.text,
+      });
+      textEl.style.flex = '1';
+      textEl.style.overflow = 'hidden';
+      textEl.style.textOverflow = 'ellipsis';
+      textEl.style.whiteSpace = 'nowrap';
+      textEl.title = entry.text;
+
+      const hintEl = row.createEl('span', {
+        cls: 'cloze-bank-hint',
+        text: entry.hint,
+      });
+      hintEl.style.flex = '1';
+      hintEl.style.overflow = 'hidden';
+      hintEl.style.textOverflow = 'ellipsis';
+      hintEl.style.whiteSpace = 'nowrap';
+      hintEl.style.color = 'var(--text-muted)';
+      hintEl.title = entry.hint;
+    } else if (IsFlashcardEntry(entry)) {
       const frontEl = row.createEl('span', {
         cls: 'flash-bank-front',
         text: entry.front,
@@ -179,13 +225,13 @@ export class EditBankModal extends Modal {
     const newText = remaining.map(formatPracticeEntry).join('\n');
     await this.app.vault.modify(file, newText);
 
-    // Hanzi notices show pretty-tone pinyin (hǎo, not hao3); flashcards use
-    // the generic "front (back)" label.
-    const label = IsFlashcardEntry(entry)
-      ? entryLabel(entry)
-      : entry.pinyin
+    // Hanzi notices show pretty-tone pinyin (hǎo, not hao3); every other
+    // card type uses its generic entryLabel.
+    const label = IsHanziEntry(entry)
+      ? entry.pinyin
         ? `${entry.character} (${prettifyPinyin(entry.pinyin)})`
-        : entry.character;
+        : entry.character
+      : entryLabel(entry);
     new Notice(`Removed ${label} from your practice bank.`);
     await this.renderList();
   }

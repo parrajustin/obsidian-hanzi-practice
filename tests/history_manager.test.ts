@@ -6,6 +6,7 @@ import {
   HANZI_BANK,
   HanziEntry,
   FlashcardEntry,
+  IsHanziEntry,
 } from '../src/utils/practice_list';
 import {App} from 'obsidian';
 import {FileUtil} from 'standard-obsidian-lib/src/filesystem/file_util';
@@ -359,7 +360,7 @@ describe('HistoryManager', () => {
       hanziEntry('好', 'hao3', 'good'),
     );
 
-    expect(mixUp && !('front' in mixUp) ? mixUp.character : null).toBe('汉');
+    expect(mixUp && IsHanziEntry(mixUp) ? mixUp.character : null).toBe('汉');
   });
 
   it('getMixUpEntry never returns another sense of the same character', async () => {

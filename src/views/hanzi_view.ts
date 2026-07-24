@@ -6,13 +6,19 @@ import {bankSources} from '../settings';
 import {HistoryManager} from '../utils/history_manager';
 import {PinyinSelector} from '../components/pinyin_selector';
 import {FlashCard} from '../components/flash_card';
+import {MultiChoiceCard} from '../components/multi_choice_card';
+import {ClozeCard} from '../components/cloze_card';
 import {HanziQuizWriter} from '../writer/quiz_writer';
 import {
   CardType,
+  ClozeEntry,
   computeEntryId,
   FlashcardEntry,
   HANZI_BANK,
+  IsClozeEntry,
   IsFlashcardEntry,
+  IsMultiChoiceEntry,
+  MultiChoiceEntry,
   PracticeEntry,
 } from '../utils/practice_list';
 
@@ -104,6 +110,16 @@ export class HanziPracticeView extends ItemView {
 
     if (nextEntry && IsFlashcardEntry(nextEntry)) {
       this.renderFlashcard(container, nextEntry);
+      return;
+    }
+
+    if (nextEntry && IsMultiChoiceEntry(nextEntry)) {
+      this.renderMultiChoice(container, nextEntry);
+      return;
+    }
+
+    if (nextEntry && IsClozeEntry(nextEntry)) {
+      this.renderCloze(container, nextEntry);
       return;
     }
 
@@ -213,13 +229,53 @@ export class HanziPracticeView extends ItemView {
       reversed ? entry.back : entry.front,
       reversed ? entry.front : entry.back,
       score => {
-        void this.handleFlashcardGrade(entry, score);
+        void this.handleCardGrade(entry, score);
       },
     );
     card.render();
   }
 
-  async handleFlashcardGrade(entry: FlashcardEntry, score: number) {
+  /**
+   * Multiple-choice practice: pick the answer among shuffled distractors.
+   * Auto-graded from the wrong picks — with so few options, one wrong pick
+   * reveals too much to count as a pass: 0 mistakes → 5, 1 → 2, 2+ → 0.
+   */
+  private renderMultiChoice(container: Element, entry: MultiChoiceEntry) {
+    container.createEl('h2', {text: `Practice: ${this.bank}`});
+
+    const card = new MultiChoiceCard(
+      container as HTMLElement,
+      entry.question,
+      entry.answer,
+      entry.distractors,
+      mistakes => {
+        const score = mistakes === 0 ? 5 : mistakes === 1 ? 2 : 0;
+        void this.handleCardGrade(entry, score);
+      },
+    );
+    card.render();
+  }
+
+  /**
+   * Cloze practice: the sentence is shown with its `{{…}}` answers blanked;
+   * reveal, then self-grade 0–5 exactly like a flashcard.
+   */
+  private renderCloze(container: Element, entry: ClozeEntry) {
+    container.createEl('h2', {text: `Practice: ${this.bank}`});
+
+    const card = new ClozeCard(
+      container as HTMLElement,
+      entry.text,
+      entry.hint,
+      score => {
+        void this.handleCardGrade(entry, score);
+      },
+    );
+    card.render();
+  }
+
+  /** Append one graded review to history and advance to the next due card. */
+  async handleCardGrade(entry: PracticeEntry, score: number) {
     await HistoryManager.appendResult(
       this.plugin.app,
       this.plugin.settings.historyFilePath,

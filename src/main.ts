@@ -103,9 +103,11 @@ export default class HanziPracticePlugin extends Plugin {
       },
     });
 
+    // Id kept from when the modal only added flashcards (renaming command
+    // ids breaks users' hotkey bindings); it now adds every non-hanzi type.
     this.addCommand({
       id: 'add-flash-card',
-      name: 'Add Flash Card to Practice',
+      name: 'Add Card to Practice',
       callback: () => {
         new AddFlashcardModal(this.app, this).open();
       },

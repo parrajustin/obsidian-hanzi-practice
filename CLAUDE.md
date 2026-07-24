@@ -12,6 +12,14 @@ practice item is a **card** with a **card type** (how it is practiced) belonging
   (Very Easy=5 / Easy=4 / Hard=3 / Very Hard=2 / No Idea=0 — `FLASHCARD_GRADES` in
   `src/components/flash_card.ts`).
 - **2 = reversible flashcard**: like 1, but either side may be shown as the prompt.
+- **3 = multiple choice**: question + correct answer + distractors as shuffled buttons
+  (`src/components/multi_choice_card.ts`, same interaction as the pinyin selector);
+  auto-graded from wrong picks — 0 mistakes → 5, 1 → 2, 2+ → 0 (with so few options one
+  wrong pick reveals too much to pass).
+- **4 = cloze (fill in the blank)**: a sentence with each answer wrapped in `{{…}}`
+  (`src/components/cloze_card.ts`); the prompt blanks them out (plus optional hint),
+  reveal shows the full sentence, then self-grade exactly like a flashcard (typed answers
+  would fight the IME, especially on mobile).
 
 All types feed the same SuperMemo-2-style spaced-repetition engine and track history in plain
 markdown files inside the vault. Ids (view type `hanzi-practice-view`, command ids, entry-id
@@ -33,8 +41,9 @@ hotkeys/history.
 - `src/views/hanzi_view.ts` — the `HanziPracticeView` (ItemView). One view instance practices
   ONE bank (`bank` is view state via `setState`/`getState`, default `Hanzi`, so it persists in
   the workspace layout) and renders whatever UI the due card's type needs: flashcards get a
-  `FlashCard` (flip + self-grade → `handleFlashcardGrade` appends history and advances);
-  an empty non-Hanzi bank shows `.practice-empty`. Hanzi cards: picks the next due char, reads
+  `FlashCard`, multiple-choice cards a `MultiChoiceCard` (auto-grade mapping lives in
+  `renderMultiChoice`), cloze cards a `ClozeCard` — all three funnel into `handleCardGrade`
+  (appends history, advances); an empty non-Hanzi bank shows `.practice-empty`. Hanzi cards: picks the next due char, reads
   its **cached** pinyin + English def **from the practice list** (never CEDICT), renders the
   `Meaning:` line (`.hanzi-meaning`) + `PinyinSelector` (`.tone-selector`) + the quiz writer's
   draw box, grades on quiz complete, appends to history, then reopens for the next char. Gets
@@ -85,18 +94,26 @@ hotkeys/history.
   `.hanzi-add-error` (red) + `Notice`, modal stays open; typing clears the error + selection.
 - `src/commands/edit_bank_modal.ts` — `edit-hanzi-bank` command's modal: lists every practice
   entry (`.hanzi-bank-row`: char/pretty pinyin/English for hanzi, `.flash-bank-front`/`-back`
-  for flashcards) with a `.hanzi-bank-remove` button, grouped under `.practice-bank-heading`
+  for flashcards, `.mc-bank-question`/`-answer` for multiple choice — the answer's tooltip
+  also lists the distractors — and `.cloze-bank-text`/`-hint` for cloze) with a
+  `.hanzi-bank-remove` button, grouped under `.practice-bank-heading`
   headers **only when more than one bank exists** (a hanzi-only vault renders the same DOM as
   before — the E2E depends on it). Removal filters by entry id and rewrites the words file via
   `formatPracticeEntry` (also migrating old-format lines). History lines are never touched
   (they're a log).
-- `src/commands/add_flashcard_modal.ts` — `add-flash-card` command's modal: bank
+- `src/commands/add_flashcard_modal.ts` — `add-flash-card` command's "Add Card" modal: bank
   **dropdown** (`.flash-bank-dropdown`, listing the banks configured in settings; a
-  no-banks message points to Settings when empty), front/back textareas, reversible toggle
-  (`.flash-reversible-toggle`). The card is **written to its bank's own file**
-  (`bank.filePath`). Dup-check by id (`computeFlashcardId(bank, front, back)` — same text may
-  live in two banks); duplicate → inline `.flash-add-error` + `Notice`. Stays open after a
-  successful add (front/back clear, bank + toggle stick) for batch entry.
+  no-banks message points to Settings when empty) + **card-type dropdown**
+  (`.flash-type-dropdown`: Flashcard / Multiple choice / Fill in the blank) that swaps the
+  field set (`.flash-card-fields`): flashcard = front/back textareas + reversible toggle
+  (`.flash-reversible-toggle` → type 2); multiple choice = question/answer/wrong-options
+  textareas (distractors one per line; requires ≥1, and none may equal the answer); cloze =
+  sentence/hint textareas (requires ≥1 `{{…}}` blank so a blankless card can't be authored
+  by accident). The card is **written to its bank's own file** (`bank.filePath`). Dup-check
+  by id (`computeFlashcardId` / `computeMultiChoiceId` / `computeClozeId` — all hash the
+  bank, so the same text may live in two banks); duplicate or validation error → inline
+  `.flash-add-error` + `Notice`. Stays open after a successful add (text fields clear;
+  bank + type + toggle stick) for batch entry.
 - `src/commands/practice_bank_modal.ts` — `practice` command's modal: one
   `.practice-bank-option` button per bank (name + card count) — every configured bank shows
   even with 0 cards, `Hanzi` listed first, plus any legacy bank tags found in files; picking
@@ -105,6 +122,17 @@ hotkeys/history.
   `.flash-card-flip` "Show Answer" button; flipping reveals the back and swaps in
   `.flash-card-grades` (one `.flash-card-grade` button per `FLASHCARD_GRADES` entry,
   `data-score` attr). One grade per card; grading an unseen answer is impossible.
+- `src/components/multi_choice_card.ts` — `MultiChoiceCard`: `.mc-card` with `.mc-question`
+  and Fisher-Yates-shuffled `.mc-option` buttons (answer + distractors). Wrong pick → red
+  border + disabled + mistake++; the correct pick disables everything and fires
+  `onComplete(mistakes)` (the view maps mistakes → score). PinyinSelector's interaction
+  model, generalized.
+- `src/components/cloze_card.ts` — `ClozeCard`: `.cloze-card` renders the sentence's
+  segments (`parseClozeSegments`) as `.cloze-prompt` with each blank as an underlined
+  `.cloze-blank` "____", optional `.cloze-hint`, and a pre-built hidden `.cloze-answer`
+  (blanked words accented via `.cloze-answer-blank`); `.cloze-reveal` shows the answer and
+  swaps in `.cloze-grades`/`.cloze-grade` buttons (same `FLASHCARD_GRADES`, `data-score`
+  attr, one grade per card).
 - `src/dictionary/definition_lookup.ts` — `lookupDefinitions(dict, input)`: merges
   simplified+traditional trie hits, dedupes identical payloads, JSON-parses each sense
   (via `WrapToResult`, skipping malformed ones). Unit-tested in `tests/definition_lookup.test.ts`.
@@ -115,15 +143,21 @@ hotkeys/history.
 - `src/utils/prettify_pinyin.ts` — `prettifyPinyin` (numeric→accented, `shi4`→`shì`) and
   `ConstructOtherOptions` (distractor pinyin; expects **numeric** pinyin like `hao3`).
 - `src/utils/practice_list.ts` — the data model: `CardType` enum, `HANZI_BANK`, and
-  `PracticeEntry` = `HanziEntry | FlashcardEntry` (discriminated on `cardType`; use
-  `IsFlashcardEntry`, written so a MISSING cardType — e.g. objects injected by the E2E —
-  falls through to the hanzi path). `parsePracticeList` / `formatPracticeEntry` for the
-  words-file format, plus the id hashes (`computeCardId` = FNV-1a 32-bit over
+  `PracticeEntry` = `HanziEntry | FlashcardEntry | MultiChoiceEntry | ClozeEntry`
+  (discriminated on `cardType`; guards `IsFlashcardEntry` / `IsMultiChoiceEntry` /
+  `IsClozeEntry` / `IsHanziEntry` — the last written so a MISSING cardType, e.g. objects
+  injected by the E2E, falls through to the hanzi path). `parsePracticeList` /
+  `formatPracticeEntry` for the words-file format, plus the id hashes (`computeCardId` = FNV-1a 32-bit over
   `\u001f`-joined parts → 8 hex chars; pure string math, no Node `crypto` — mobile-safe):
   `computeEntryId(char, pinyin)` (unchanged from the hanzi-only era — existing history must
-  stay attached) and `computeFlashcardId(bank, front, back)`. Each (char, pinyin) sense is
-  its own entry with its own `id`. `sanitizeField` collapses tabs/newlines in user text so
-  the line format survives. Backward-compatible: 4-field lines get cardType 0 + bank `Hanzi`,
+  stay attached), `computeFlashcardId(bank, front, back)`,
+  `computeMultiChoiceId(bank, question, answer)` (distractors NOT hashed — freely
+  editable), and `computeClozeId(bank, text)`. Each (char, pinyin) sense is its own entry
+  with its own `id`. `sanitizeField` collapses tabs/newlines in user text so the line
+  format survives; `sanitizeOption` additionally rewrites `|` → `/` in multiple-choice
+  option text (`|` joins the stored distractor list). `parseClozeSegments` splits a cloze
+  sentence into literal/`{{blank}}` runs (shared by the component, `entryLabel`, and the
+  add-modal's validation). Backward-compatible: 4-field lines get cardType 0 + bank `Hanzi`,
   3-field lines also derive the id, plain one-char lines parse with empty pinyin/def; unknown
   card types parse as hanzi (forward compat) rather than being dropped. `listBanks` returns
   distinct banks, `Hanzi` first.
@@ -187,9 +221,13 @@ needed**; the old hanzi-writer CDN dependency is gone.
 - Line format — one card per line, **TAB-separated**, 6 fields:
   `f0⇥f1⇥f2⇥id⇥cardType⇥bank`. For hanzi cards (type 0) f0/f1/f2 =
   char/pinyin/english (e.g. `好\thao3\tgood/appropriate; …\t<8-hex id>\t0\tHanzi`); for
-  flashcards (types 1/2) f0/f1 = front/back, f2 empty. `pinyin` is numeric CEDICT form;
-  hanzi `id` = `computeEntryId(char, pinyin)` (historical hash — unchanged), flashcard `id` =
-  `computeFlashcardId(bank, front, back)`. A char can appear on several lines (one per
+  flashcards (types 1/2) f0/f1 = front/back, f2 empty; for multiple choice (type 3)
+  f0/f1/f2 = question/answer/distractors joined by `|` (option text is `sanitizeOption`d
+  so it never contains `|`); for cloze (type 4) f0/f1 = sentence-with-`{{…}}`-blanks/hint,
+  f2 empty. `pinyin` is numeric CEDICT form; hanzi `id` = `computeEntryId(char, pinyin)`
+  (historical hash — unchanged), flashcard `id` = `computeFlashcardId(bank, front, back)`,
+  multiple-choice `id` = `computeMultiChoiceId(bank, question, answer)`, cloze `id` =
+  `computeClozeId(bank, text)`. A char can appear on several lines (one per
   sense). Old 4-field/3-field and plain one-char lines are still accepted (cardType 0 + bank
   `Hanzi` assumed; id derived when missing; pinyin/def empty). Tabs are used as the separator
   because CEDICT definitions contain `/`, `|`, `;`, `(`, `)`, `:` but never tabs — and
@@ -207,8 +245,9 @@ due immediately; passing → review #1 `+1` day, #2 `+6`, #3+ `lastReviewDay + c
 * efactor)` where efactor accumulates the SM-2 modifier (min 1.3). Final grade =
 `min(strokeScore, pinyinCeiling)` — stroke mistakes give a 0–5 base, pinyin mistakes cap it
 (`>1`→3, `1`→4, `0`→5) — **unless Give Up was pressed, which locks the grade to 0** no matter
-how the guided strokes are then traced. Flashcards skip all of that: the user self-grades
-(`FLASHCARD_GRADES` button → 5/4/3/2/0) and that value feeds the scheduler directly. Full
+how the guided strokes are then traced. Flashcards and cloze cards skip all of that: the
+user self-grades (`FLASHCARD_GRADES` button → 5/4/3/2/0) and that value feeds the scheduler
+directly. Multiple-choice cards auto-grade from wrong picks: 0 → 5, 1 → 2, 2+ → 0. Full
 spec in `hanzi-practice-architecture.md`.
 
 ---
@@ -249,11 +288,29 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
    `jest.config.js` are ignored. `npm run lint:fix` / `npm run format` to auto-fix — but beware:
    `eslint . --fix` on *unformatted* code once produced broken output from overlapping fixes;
    run `npm run format` (plain prettier) first, then `lint:fix`.
-3. `test:unit` — `npx jest`: 21 tests across `cedict_parser` / `history_manager` /
-   `spaced_repetition` / `stroke_codec` (HZS1 round-trip incl. negative + astral-plane chars) /
-   `stroke_matcher` (accepts median replay + jitter, rejects backwards/wrong/far strokes), using
-   `tests/__mocks__/obsidian.ts` for the `obsidian` module. Any new `obsidian` API used in a
-   jest-reachable file must be added to that mock.
+3. `test:unit` — `npx jest`: 147 tests across 19 suites — the data layer
+   (`practice_list` / `history_manager` / `spaced_repetition` / `stroke_codec` (HZS2
+   round-trip incl. negative + astral-plane chars) / `stroke_matcher` (accepts median replay
+   + jitter, rejects backwards/wrong/far strokes) / `cedict_parser` + the node-env loaders
+   `stroke_data` + `cedict_load` (gzip magic, corrupt-gzip, fetch-error paths)), the DOM
+   components (`components.test.ts`: FlashCard / MultiChoiceCard / ClozeCard /
+   PinyinSelector), the modals (`add_flashcard_modal` incl. per-type validation,
+   `edit_bank_modal`, `practice_bank_modal`), the settings tab (`settings_tab`), and the
+   practice view (`hanzi_view`: per-type dispatch, quiz grading incl. Give Up, mix-up).
+   **Coverage is enforced**: `collectCoverageFrom` counts EVERY `src/**` file (except
+   `main.ts` — plugin lifecycle glue covered by the E2E — and `writer/quiz_writer.ts` —
+   pointer/SVG capture covered by the component golden runner) with a global
+   `coverageThreshold` of ≥65% on statements/branches/functions/lines (actual: ~92/94/90/92);
+   a jest run FAILS if new untested code drops any metric below the floor.
+   Infrastructure: `tests/__mocks__/obsidian.ts` mocks the `obsidian` module (Modal,
+   Setting + Text/TextArea/Dropdown/Toggle/Button/ExtraButton components, TFile, and a
+   `noticeMessages` array capturing Notice texts — import mock-only exports from the mock
+   file path directly, the real typings lack them); `tests/setup_obsidian_dom.ts` shims
+   Obsidian's Element helpers (`createEl`/`createDiv`/`empty`/…) into jsdom (no-op under
+   node-env suites). `testPathIgnorePatterns`/`modulePathIgnorePatterns` exclude
+   `.claude/worktrees` checkouts — without the latter their `__mocks__/obsidian.ts` copies
+   register as duplicate manual mocks and win module resolution. Any new `obsidian` API
+   used in a jest-reachable file must be added to the mock.
 
 Note: `typescript-eslint` is pinned to 8.62.1 via `pnpm-workspace.yaml` `overrides:` — gts's
 `^8.46.1` range otherwise resolves to 8.64.0, which is only partially published on npm (its
@@ -340,6 +397,27 @@ Then re-run `npm run test:e2e:docker` and confirm every `[visual]` line reports 
    asserts the prompt is one of the two sides, the flip reveals the OTHER side, and grading
    Very Easy appends `<id> dog (Hund): 5` (the history label always uses the stored
    front (back), independent of the side shown). Dumps only, no goldens.
+11. Multiple-choice card (type 3):
+   `add-flash-card` modal with `.flash-type-dropdown` set to Multiple choice (bank
+   Capitals) swaps in question/answer/wrong-options textareas (distractors typed one per
+   line) → Add writes `你__狗吗？⇥有没有⇥不有|没不有⇥<id>⇥3⇥Capitals` to
+   capitals-cards.md. Practicing Capitals must show the MC card (only strictly-due card —
+   France was graded in step 9), with the question and exactly the 3 shuffled options;
+   clicking the wrong option `不有` must mark it red + disabled WITHOUT completing;
+   clicking `有没有` completes and auto-grades → history `<id> 你__狗吗？ (有没有): 2`
+   (1 mistake → 2 = fail), and the view re-shows the card (due again today). Goldens
+   `step11-add-mc` / `step11-mc-options` / `step11-mc-wrong-pick` — the shuffled option
+   buttons are DOM-sorted (by text) before each screenshot so the pixels are
+   deterministic; the post-grade reshuffle stays dump-only.
+12. Cloze card (type 4): modal with type Fill in the blank (bank German) swaps
+   in sentence/hint textareas → Add writes
+   `我一个星期{{没}}吃饭。⇥I haven't eaten for a week.⇥⇥<id>⇥4⇥German`. Practicing German
+   must show the cloze card blanked (`.cloze-prompt` = `我一个星期____吃饭。` — the 没 must
+   NOT appear — plus the `.cloze-hint`), `.cloze-reveal` shows the full sentence and the 5
+   grade buttons (same labels/scores as flashcards), and grading Hard appends
+   `<id> 我一个星期[没]吃饭。 (I haven't eaten for a week.): 3` (the label flattens
+   `{{…}}` to `[…]`). Goldens `step12-add-cloze` / `step12-cloze-prompt` /
+   `step12-cloze-revealed` (fully deterministic — nothing shuffles).
 
 ### Validate a run
 - **Exit code 0** and the log's last line is `RESULT: PASS`:
