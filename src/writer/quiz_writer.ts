@@ -20,6 +20,13 @@ const BOUNDS_TO = {x: 1024, y: 900};
 
 // Rendered brush width for median-fallback strokes, in data-space units.
 const BRUSH_WIDTH = 50;
+// Highlight color shared by the miss hint and the guided-practice flash: both
+// mean "this is the stroke you should draw now".
+const HIGHLIGHT_COLOR = '#FF9800';
+// A rejected stroke's ink flashes in this red before it is removed.
+const WRONG_COLOR = '#D32F2F';
+// "Done" green: guided-practice traced strokes and the completion edge.
+const DONE_COLOR = '#4CAF50';
 // Brush width for the give-up animation's reveal stroke: fat enough that
 // sweeping it along the median uncovers the whole clipped glyph outline
 // (same value hanzi-writer uses).
@@ -50,6 +57,12 @@ export interface QuizCallbacks {
     strokesRemaining: number;
   }) => void;
   onComplete?: (summary: {character: string; totalMistakes: number}) => void;
+  /**
+   * Fired when the last stroke of a guided practice pass is traced. The
+   * writer then replays the animation and resets to an unguided quiz — the
+   * quiz only completes (onComplete) after that unguided pass.
+   */
+  onPracticeComplete?: () => void;
 }
 
 export class HanziQuizWriter {
@@ -63,6 +76,7 @@ export class HanziQuizWriter {
   private outlineGroup: SVGGElement;
   private completedGroup: SVGGElement;
   private hintGroup: SVGGElement;
+  private currentGroup: SVGGElement;
   private inkGroup: SVGGElement;
 
   private scale: number;
@@ -74,10 +88,20 @@ export class HanziQuizWriter {
   currentStrokeIndex = 0;
   totalMistakes = 0;
   mistakesOnCurrentStroke = 0;
+  /** How long a rejected stroke's ink flashes red before it is removed. */
+  wrongFlashMs = 250;
+  /** Per-stroke speed of the guided reveal/replay animations. */
+  replayPerStrokeMs = 400;
+  /** Pause showing the fully-traced character before the replay starts. */
+  replayPauseMs = 800;
+  /** Guided practice: strokes are revealed and the current one flashes. */
+  private guided = false;
 
   private drawing = false;
   private currentInkPoints: Point[] = []; // svg-local px
   private currentInkPath: SVGPathElement | null = null;
+  private wrongInkPath: SVGPathElement | null = null;
+  private wrongInkTimer: number | null = null;
   private animationTimers: number[] = [];
 
   constructor(
@@ -117,6 +141,16 @@ export class HanziQuizWriter {
     this.defs = document.createElementNS(SVG_NS, 'defs');
     this.svg.appendChild(this.defs);
 
+    // The flash animations ship inside the SVG itself (not a plugin
+    // stylesheet) so the writer renders identically anywhere it is mounted.
+    const style = document.createElementNS(SVG_NS, 'style');
+    style.textContent =
+      '@keyframes hanzi-stroke-flash { 0%, 100% { opacity: 1; } 50% { opacity: 0.15; } }\n' +
+      '.hanzi-stroke-current { animation: hanzi-stroke-flash 1s ease-in-out infinite; }\n' +
+      '.hanzi-user-stroke-wrong { animation: hanzi-stroke-flash 0.25s ease-in-out infinite; }\n' +
+      `.hanzi-quiz-complete { outline: 4px solid ${DONE_COLOR}; outline-offset: -4px; }`;
+    this.svg.appendChild(style);
+
     // Character-shaped groups live in DATA space (y-up); this transform maps
     // them to screen so glyph outline paths can be used verbatim as `d`.
     const dataTransform = `translate(${this.xOffset}, ${height - this.yOffset}) scale(${this.scale}, ${-this.scale})`;
@@ -126,6 +160,7 @@ export class HanziQuizWriter {
       dataTransform,
     );
     this.hintGroup = this.makeGroup('hanzi-hint-group', dataTransform);
+    this.currentGroup = this.makeGroup('hanzi-current-group', dataTransform);
     // User ink renders in raw svg-local pixels — no transform.
     this.inkGroup = this.makeGroup('hanzi-ink-group');
 
@@ -155,15 +190,42 @@ export class HanziQuizWriter {
     return this.currentStrokeIndex >= this.medians.length;
   }
 
+  get isGuided(): boolean {
+    return this.guided;
+  }
+
   quiz(callbacks: QuizCallbacks) {
     this.callbacks = callbacks;
     this.quizActive = true;
+    this.guided = false;
     this.currentStrokeIndex = 0;
     this.totalMistakes = 0;
     this.mistakesOnCurrentStroke = 0;
+    this.clearWrongInk();
+    this.svg.classList.remove('hanzi-quiz-complete');
     this.completedGroup.replaceChildren();
     this.hintGroup.replaceChildren();
+    this.currentGroup.replaceChildren();
     this.inkGroup.replaceChildren();
+  }
+
+  /**
+   * Guided practice (Give Up): reveal the character (outline + stroke
+   * animation), then flash the stroke the user should draw next. Once all
+   * strokes are traced (they turn white as they pass) the writer replays the
+   * animation and resets to an unguided quiz — onComplete only fires after
+   * the user then draws the whole character by themselves.
+   */
+  startGuidedPractice() {
+    this.clearAnimationTimers();
+    this.showOutline();
+    this.guided = true;
+    this.currentGroup.replaceChildren();
+    this.animateCharacter(this.replayPerStrokeMs);
+    const revealDone = this.replayPerStrokeMs * this.medians.length + 600;
+    this.animationTimers.push(
+      window.setTimeout(() => this.renderCurrentStrokeFlash(), revealDone),
+    );
   }
 
   /** Draw every stroke's glyph shape in a light outline color (Give Up). */
@@ -219,6 +281,7 @@ export class HanziQuizWriter {
 
   destroy() {
     this.clearAnimationTimers();
+    this.clearWrongInk();
     this.svg.remove();
   }
 
@@ -301,9 +364,16 @@ export class HanziQuizWriter {
 
   private blockNativeTouch = (evt: TouchEvent) => {
     evt.preventDefault();
+    // Never let a touch on the drawing surface reach Obsidian's app-level
+    // gesture recognizers (mobile's swipe-down opens the command menu).
+    evt.stopPropagation();
   };
 
   private onPointerDown = (evt: PointerEvent) => {
+    // Pointer events on the drawing surface are ours alone — bubbling up
+    // lets Obsidian mobile interpret a stroke as an app gesture (e.g. the
+    // swipe-down command menu).
+    evt.stopPropagation();
     if (!this.quizActive || this.isComplete) return;
     evt.preventDefault();
     // Synthetic events (tests) may carry a pointerId with no active pointer;
@@ -312,6 +382,8 @@ export class HanziQuizWriter {
       () => this.svg.setPointerCapture(evt.pointerId),
       'setPointerCapture failed',
     );
+    // Starting a new attempt dismisses the previous one's red flash.
+    this.clearWrongInk();
     this.drawing = true;
     this.currentInkPoints = [this.svgLocalPoint(evt)];
     this.currentInkPath = document.createElementNS(SVG_NS, 'path');
@@ -326,6 +398,7 @@ export class HanziQuizWriter {
   };
 
   private onPointerMove = (evt: PointerEvent) => {
+    evt.stopPropagation();
     if (!this.drawing) return;
     evt.preventDefault();
     this.currentInkPoints.push(this.svgLocalPoint(evt));
@@ -333,6 +406,7 @@ export class HanziQuizWriter {
   };
 
   private onPointerUp = (evt: PointerEvent) => {
+    evt.stopPropagation();
     if (!this.drawing) return;
     evt.preventDefault();
     this.drawing = false;
@@ -351,10 +425,13 @@ export class HanziQuizWriter {
 
   private gradeCurrentInk() {
     const inkPoints = this.currentInkPoints;
-    this.currentInkPath?.remove();
+    const inkPath = this.currentInkPath;
     this.currentInkPath = null;
     this.currentInkPoints = [];
-    if (this.isComplete) return;
+    if (this.isComplete) {
+      inkPath?.remove();
+      return;
+    }
 
     const dataPoints = inkPoints.map(p => this.screenToData(p));
     const strokeNum = this.currentStrokeIndex;
@@ -365,42 +442,132 @@ export class HanziQuizWriter {
     );
 
     if (matched) {
+      inkPath?.remove();
       this.hintGroup.replaceChildren();
       this.mistakesOnCurrentStroke = 0;
+      // In guided practice the stroke is traced over the revealed (dark)
+      // character, so a passed stroke turns GREEN (same green as the
+      // completion edge) to show it is done.
       this.completedGroup.appendChild(
-        this.makeStrokeShape(strokeNum, '#555', 'hanzi-stroke-done'),
+        this.makeStrokeShape(
+          strokeNum,
+          this.guided ? DONE_COLOR : '#555',
+          'hanzi-stroke-done',
+        ),
       );
       this.currentStrokeIndex++;
+      this.renderCurrentStrokeFlash();
       this.callbacks.onCorrectStroke?.({
         strokeNum,
         strokesRemaining: this.medians.length - this.currentStrokeIndex,
       });
       if (this.isComplete) {
-        this.quizActive = false;
-        this.callbacks.onComplete?.({
-          character: this.character,
-          totalMistakes: this.totalMistakes,
-        });
+        if (this.guided) {
+          // Every stroke has been practiced: replay the animation, then
+          // reset to a blank unguided quiz — the user must draw the whole
+          // character by themselves before onComplete can fire.
+          this.callbacks.onPracticeComplete?.();
+          this.replayThenSelfTest();
+        } else {
+          this.quizActive = false;
+          // The stroke portion is finished: highlight the drawing area's
+          // edge (green) while the rest of the card (e.g. tone) wraps up.
+          this.svg.classList.add('hanzi-quiz-complete');
+          this.callbacks.onComplete?.({
+            character: this.character,
+            totalMistakes: this.totalMistakes,
+          });
+        }
       }
     } else {
       this.totalMistakes++;
       this.mistakesOnCurrentStroke++;
+      // The rejected ink flashes red so the miss is visible, then clears.
+      if (inkPath) this.flashWrongInk(inkPath);
       this.callbacks.onMistake?.({
         strokeNum,
         mistakesOnStroke: this.mistakesOnCurrentStroke,
         totalMistakes: this.totalMistakes,
       });
       // The user keeps missing this stroke: highlight the expected stroke as
-      // a hint. It stays visible until the stroke is drawn correctly.
+      // a hint. It stays visible until the stroke is drawn correctly. Guided
+      // practice already flashes the expected stroke, so no hint there.
       if (
+        !this.guided &&
         this.mistakesOnCurrentStroke >= this.opts.hintAfterMisses &&
         this.hintGroup.childElementCount === 0
       ) {
         this.hintGroup.appendChild(
-          this.makeStrokeShape(strokeNum, '#FF9800', 'hanzi-stroke-hint'),
+          this.makeStrokeShape(strokeNum, HIGHLIGHT_COLOR, 'hanzi-stroke-hint'),
         );
       }
     }
+  }
+
+  /** Flash (then remove) a rejected stroke's ink in red. */
+  private flashWrongInk(inkPath: SVGPathElement) {
+    this.clearWrongInk();
+    inkPath.classList.remove('hanzi-user-stroke');
+    inkPath.classList.add('hanzi-user-stroke-wrong');
+    inkPath.setAttribute('stroke', WRONG_COLOR);
+    this.wrongInkPath = inkPath;
+    this.wrongInkTimer = window.setTimeout(
+      () => this.clearWrongInk(),
+      this.wrongFlashMs,
+    );
+  }
+
+  private clearWrongInk() {
+    if (this.wrongInkTimer !== null) {
+      window.clearTimeout(this.wrongInkTimer);
+      this.wrongInkTimer = null;
+    }
+    this.wrongInkPath?.remove();
+    this.wrongInkPath = null;
+  }
+
+  /** Guided practice: flash the stroke the user should draw next. */
+  private renderCurrentStrokeFlash() {
+    this.currentGroup.replaceChildren();
+    if (!this.guided || this.isComplete) return;
+    this.currentGroup.appendChild(
+      this.makeStrokeShape(
+        this.currentStrokeIndex,
+        HIGHLIGHT_COLOR,
+        'hanzi-stroke-current',
+      ),
+    );
+  }
+
+  /**
+   * Guided practice finished: hold the fully-traced character briefly, then
+   * replay the full animation (one more hint), then clear the board and
+   * restart the (still active) quiz unguided.
+   */
+  private replayThenSelfTest() {
+    this.guided = false;
+    this.renderCurrentStrokeFlash();
+    this.animationTimers.push(
+      window.setTimeout(() => this.startReplay(), this.replayPauseMs),
+    );
+  }
+
+  private startReplay() {
+    this.animateCharacter(this.replayPerStrokeMs);
+    const total = this.replayPerStrokeMs * this.medians.length + 600;
+    this.animationTimers.push(
+      window.setTimeout(() => this.resetForSelfTest(), total),
+    );
+  }
+
+  private resetForSelfTest() {
+    this.clearAnimationTimers();
+    this.outlineGroup.replaceChildren();
+    this.completedGroup.replaceChildren();
+    this.hintGroup.replaceChildren();
+    this.currentGroup.replaceChildren();
+    this.currentStrokeIndex = 0;
+    this.mistakesOnCurrentStroke = 0;
   }
 
   private clearAnimationTimers() {

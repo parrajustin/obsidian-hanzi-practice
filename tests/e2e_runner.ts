@@ -10,6 +10,7 @@ import {
   computeFlashcardId,
   computeMultiChoiceId,
 } from '../src/utils/practice_list';
+import {prettifyPinyin} from '../src/utils/prettify_pinyin';
 
 // --- Mobile emulation ----------------------------------------------------
 // E2E_EMULATE_MOBILE=1 runs the whole flow with Obsidian's built-in mobile
@@ -977,6 +978,9 @@ async function run() {
       );
     }
     console.log('Verified hint highlight after 3 misses.');
+    // A rejected stroke's ink now flashes red for 250ms; let it clear so the
+    // golden only contains the hint highlight.
+    await delay(400);
     await takeAndCompareScreenshot(page, 'step6-stroke-hint');
 
     // Now draw the stroke CORRECTLY (replay the expected stroke's median in
@@ -1024,40 +1028,114 @@ async function run() {
     );
     await dump(page, 'step6b-correct-stroke');
 
-    console.log('Simulating grading completion...');
-    const graded = await page.evaluate(
-      (entry: {
-        id: string;
-        character: string;
-        pinyin: string;
-        english: string;
-      }) => {
-        const workspace = (window as any).app.workspace;
-        const leaves = workspace.getLeavesOfType('hanzi-practice-view');
-        if (leaves.length === 0) return false;
-        const view = leaves[0].view;
-        // Hardcode to the entry we expect in test (id read from the words
-        // file at STEP 5) — history is keyed by the entry id.
-        view.currentEntry = entry;
-        view.currentCharacter = entry.character;
-        view.pinyinMistakes = 0; // zero mistakes simulated
-        view.handleQuizComplete({
-          character: entry.character,
-          totalMistakes: 0,
-        });
-        return true;
-      },
-      {
-        id: haoId,
-        character: '好',
-        pinyin: haoPinyin,
-        english: haoEnglish,
-      },
-    );
-    if (!graded) {
-      throw new Error('Could not find the practice view to simulate grading.');
+    // STEP 6c: finish the character for real — draw the remaining strokes.
+    // Completing the strokes must highlight the drawing area's edge (green)
+    // but NOT grade yet: grading waits for the tone pick.
+    console.log('STEP 6c: Drawing the remaining strokes correctly...');
+    for (let strokeNum = 1; strokeNum < 6; strokeNum++) {
+      const pts = await page.evaluate((idx: number) => {
+        const view = (window as any).app.workspace.getLeavesOfType(
+          'hanzi-practice-view',
+        )[0].view;
+        return view.writer.getStrokeDisplayPoints(idx);
+      }, strokeNum);
+      await drawStroke(
+        pts.map((p: {x: number; y: number}) => ({
+          x: svgRect.left + p.x,
+          y: svgRect.top + p.y,
+        })),
+      );
     }
-    await delay(1500);
+    const strokesDone = await page.evaluate(() => {
+      const view = (window as any).app.workspace.getLeavesOfType(
+        'hanzi-practice-view',
+      )[0].view;
+      const svg = document.querySelector(
+        '.workspace-leaf-content[data-type="hanzi-practice-view"] #hanzi-draw-container svg',
+      );
+      return {
+        complete: view.writer.isComplete,
+        edgeHighlight: !!svg && svg.classList.contains('hanzi-quiz-complete'),
+        summaryShown: !!document.querySelector('.hanzi-complete-summary'),
+      };
+    });
+    if (!strokesDone.complete || !strokesDone.edgeHighlight) {
+      await dump(page, 'STEP6c-strokes-not-complete');
+      throw new Error(
+        `Finishing the strokes did not highlight the drawing-area edge: ${JSON.stringify(strokesDone)}`,
+      );
+    }
+    if (strokesDone.summaryShown) {
+      throw new Error('Completion page appeared before the tone was picked!');
+    }
+    console.log('Verified stroke completion + edge highlight (no grade yet).');
+    await takeAndCompareScreenshot(page, 'step6c-strokes-complete');
+
+    // STEP 6d: click the correct tone — the completion page must appear:
+    // "You have completed 好 (<def>). Your score was 1" (3 stroke mistakes
+    // on 6 strokes -> base score 1; tone right on the first try keeps it).
+    console.log('STEP 6d: Clicking the correct tone...');
+    const toneLabel = prettifyPinyin(haoPinyin);
+    const toneClicked = await page.evaluate((label: string) => {
+      const leafEl = document.querySelector(
+        '.workspace-leaf-content[data-type="hanzi-practice-view"]',
+      );
+      const btn =
+        leafEl &&
+        Array.from(leafEl.querySelectorAll('.tone-selector button')).find(
+          b => b.textContent === label,
+        );
+      if (!btn) return false;
+      (btn as HTMLElement).click();
+      return true;
+    }, toneLabel);
+    if (!toneClicked) {
+      await dump(page, 'STEP6d-tone-not-found');
+      throw new Error(`Correct tone button "${toneLabel}" not found!`);
+    }
+    await page.waitForSelector('.hanzi-complete-summary', {timeout: 3000});
+    const summaryText = await page.evaluate(
+      () =>
+        document.querySelector('.hanzi-complete-summary')?.textContent ?? '',
+    );
+    if (
+      !summaryText.includes('You have completed 好') ||
+      !summaryText.includes(`(${haoEnglish})`) ||
+      !summaryText.includes('Your score was 1')
+    ) {
+      await dump(page, 'STEP6d-bad-summary');
+      throw new Error(
+        `Completion page text wrong: ${JSON.stringify(summaryText)}`,
+      );
+    }
+    console.log('Verified completion page (char + definition + score).');
+    await takeAndCompareScreenshot(page, 'step6d-completion-page');
+
+    // After ~2.5s the page fades away and the next due character loads.
+    let advanced: {summaryGone: boolean; character: string} | null = null;
+    for (let i = 0; i < 20; i++) {
+      advanced = await page.evaluate(() => {
+        const view = (window as any).app.workspace.getLeavesOfType(
+          'hanzi-practice-view',
+        )[0].view;
+        return {
+          summaryGone: !document.querySelector('.hanzi-complete-summary'),
+          character: view.currentCharacter,
+        };
+      });
+      if (advanced!.summaryGone && advanced!.character !== '好') break;
+      await delay(400);
+    }
+    if (!advanced || !advanced.summaryGone || advanced.character === '好') {
+      await dump(page, 'STEP6d-no-advance');
+      throw new Error(
+        `Completion page did not fade into the next character: ${JSON.stringify(advanced)}`,
+      );
+    }
+    console.log(
+      `Completion page faded; next character ${advanced.character} loaded.`,
+    );
+    await delay(500);
     await takeAndCompareScreenshot(page, 'step6-graded');
 
     // STEP 7: Check the md for my attempt and score
@@ -1069,11 +1147,11 @@ async function run() {
       );
     }
     const historyMd = fs.readFileSync(historyMdPath, 'utf-8');
-    // The line must carry the entry id (the history key) AND the
-    // human-readable character + pinyin.
+    // The line must carry the entry id (the history key), the human-readable
+    // character + pinyin, and the REAL score (3 stroke mistakes -> 1).
     if (
       !historyMd.includes('- [') ||
-      !historyMd.includes(`${haoId} 好 (${haoPinyin}):`)
+      !historyMd.includes(`${haoId} 好 (${haoPinyin}): 1`)
     ) {
       throw new Error(
         `Grade with id/char/pinyin not in hanzi-practice-history.md! Contents: ${JSON.stringify(historyMd)}`,

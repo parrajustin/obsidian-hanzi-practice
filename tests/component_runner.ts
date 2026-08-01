@@ -10,16 +10,33 @@
  * synthetic pointer events at fixed coordinates and screenshotted CLIPPED to
  * the stage, so goldens contain nothing but the component.
  *
- * States covered (golden `component-<name>.png` in tests/__goldens__, docker
- * runs compare against docker/__golden__ via the bind mount):
- *   empty            fresh quiz, blank box
- *   ink              mid-stroke user ink (pointer still down)
- *   hint             expected stroke highlighted after 3 misses
- *   progress         3 strokes accepted, hint cleared
- *   complete         all 6 strokes accepted
- *   outline          showOutline() (Give Up)
- *   animation-start  animateCharacter(): first stroke only (transitions off)
- *   animation-end    animateCharacter(): finished character
+ * Golden states (`component-stepNN-<name>.png` in tests/__goldens__, docker
+ * runs compare against docker/__golden__ via the bind mount — the step
+ * number IS the capture order). Writer-only first:
+ *   step01-empty            fresh quiz, blank box
+ *   step02-ink              mid-stroke user ink (pointer still down)
+ *   step03-hint             expected stroke highlighted after 3 misses
+ *   step04-progress         3 strokes accepted, hint cleared
+ *   step05-complete         all 6 strokes accepted (green edge highlight)
+ *   step06-outline          showOutline()
+ *   step07-animation-start  animateCharacter(): first stroke only
+ *   step08-animation-end    animateCharacter(): finished character
+ *
+ * Then the FULL HanziPracticeView (mountView: heading + meaning + tone
+ * selector + writer + controls, plugin stubbed) walking the Give Up practice
+ * flow end to end:
+ *   step09-view-initial          the practice view as opened (tones sorted)
+ *   step10-giveup-animation-start  Give Up: reveal animation begins
+ *   step11-giveup-animation-end    reveal finished, flash not started yet
+ *   step12-current-stroke-flash    the stroke to draw next flashes
+ *   step13-wrong-stroke-flash      missed stroke flashing red
+ *   step14-traced-stroke-green     traced stroke turns green, next flashes
+ *   step15-practice-complete       every stroke traced (held pre-replay)
+ *   step16-replay-hint             replay animation (one more hint)
+ *   step17-selftest-stroke         matched stroke on the blank self-test
+ *   step18-selftest-complete       all correct: drawing-area edge highlight
+ *   step19-completion-page         tone picked: completed page + score
+ * (then, functionally: the page fades after 2.5s into the next due card)
  *
  * Functional assertions (mistake counts, hint appearance/clearing, event
  * callbacks, completion summary) are the source of truth; pixel diffs are
@@ -349,7 +366,16 @@ async function run() {
       `stroke DB unexpectedly small (${mounted.dbChars} chars)`,
     );
     await delay(300);
-    await shot('empty');
+    await shot('step01-empty');
+
+    // The drawing surface must swallow its pointer/touch events — bubbling
+    // to the app turns a swipe into Obsidian mobile's command menu.
+    await h('h.installBubbleProbe()');
+    const touchBlocked = await h('h.probeTouch()');
+    assert(
+      touchBlocked === true,
+      'a touch on the svg must be canceled and must not bubble to the body',
+    );
 
     // --- Mid-stroke ink (pointer held down) -----------------------------
     await h(
@@ -361,14 +387,25 @@ async function run() {
       'user ink should be visible while the pointer is down',
       s,
     );
-    await shot('ink');
+    assert(
+      s.bubbleCount === 0,
+      'pointer strokes must not bubble past the drawing surface',
+      s,
+    );
+    await shot('step02-ink');
     await h('h.release({x:285,y:95})');
     s = await state();
     assert(
-      !s.inkVisible && s.totalMistakes === 1 && !s.hintShown,
-      'released wrong stroke should clear ink and count 1 mistake, no hint yet',
+      !s.inkVisible &&
+        s.wrongInk === 1 &&
+        s.totalMistakes === 1 &&
+        !s.hintShown,
+      'released wrong stroke should flash red and count 1 mistake, no hint yet',
       s,
     );
+    await delay(400); // default red flash is 250ms
+    s = await state();
+    assert(s.wrongInk === 0, 'the red wrong-stroke flash must clear itself', s);
 
     // --- Two more misses -> hint highlight ------------------------------
     await h('h.drawWrong()');
@@ -390,7 +427,9 @@ async function run() {
       'onMistake should have fired 3 times',
       s,
     );
-    await shot('hint');
+    // Let the third miss's red flash clear so the golden holds only the hint.
+    await delay(400);
+    await shot('step03-hint');
 
     // --- Correct strokes: hint clears, progress renders -----------------
     await h('h.drawCorrect(0)');
@@ -411,7 +450,7 @@ async function run() {
       'three strokes should be accepted',
       s,
     );
-    await shot('progress');
+    await shot('step04-progress');
 
     // --- Finish the character ------------------------------------------
     await h('h.drawCorrect(3)');
@@ -431,7 +470,12 @@ async function run() {
       'onComplete must fire once with the right summary',
       s.events,
     );
-    await shot('complete');
+    assert(
+      s.svgComplete === true,
+      'finishing the strokes must highlight the drawing-area edge',
+      s,
+    );
+    await shot('step05-complete');
 
     // --- Give Up rendering: outline + animation -------------------------
     await page.evaluate(
@@ -441,7 +485,7 @@ async function run() {
     await h('h.showOutline()');
     s = await state();
     assert(s.outlineStrokes === 6, 'outline should render all six strokes', s);
-    await shot('outline');
+    await shot('step06-outline');
 
     // Deterministic "animation just started" frame: transitions disabled
     // (strokes appear whole) and a huge per-stroke delay so only the first
@@ -455,7 +499,7 @@ async function run() {
       'only the first stroke should be animated in yet',
       s,
     );
-    await shot('animation-start');
+    await shot('step07-animation-start');
 
     // Full animation at normal speed; poll for all strokes, then let the
     // last dash transition finish so the end frame is stable.
@@ -472,7 +516,224 @@ async function run() {
       `animation should render all 6 strokes (got ${animated})`,
     );
     await delay(800);
-    await shot('animation-end');
+    await shot('step08-animation-end');
+
+    // ==== FULL VIEW: give up → guided practice → replay → self-test =====
+    log('--- View: mounting the full HanziPracticeView ---');
+    const vfacts = await page.evaluate(
+      (b64: string, ch: string) =>
+        (window as any).componentHarness.mountView(b64, ch),
+      strokeDataB64,
+      '好',
+    );
+    log(`Mounted view for 好: ${JSON.stringify(vfacts)}`);
+    assert(
+      vfacts.strokeCount === 6 &&
+        vfacts.heading === 'Practice Hanzi' &&
+        vfacts.meaning === 'Meaning: good' &&
+        vfacts.toneButtons === 5 &&
+        vfacts.buttons.length === 2,
+      'view must render heading, meaning, 5 tone options, writer and controls',
+      vfacts,
+    );
+    // Tone options shuffle; sort them (and keep flash/transition animations
+    // off — the style survives the remount) so every shot is deterministic.
+    await h('h.sortToneButtons()');
+    await h('h.disableTransitions()');
+    await shot('step09-view-initial');
+
+    // --- step 10: Give Up starts the reveal animation --------------------
+    // Freeze the reveal after its first stroke so the frame is stable.
+    await h('h.setReplayMs(600000)');
+    await h('h.clickGiveUp()');
+    s = await state();
+    assert(
+      s.isGuided &&
+        s.outlineStrokes === 6 &&
+        s.animatedStrokes === 1 &&
+        s.currentFlash === 0 &&
+        s.view.gaveUp === true,
+      'Give Up must start the reveal animation (no flash during the reveal)',
+      s,
+    );
+    await shot('step10-giveup-animation-start');
+
+    // --- step 11: reveal animation finished (still no flash) -------------
+    await h('h.setReplayMs(80)');
+    await h('h.clickGiveUp()'); // restart the reveal at a fast per-stroke
+    animated = 0;
+    for (let i = 0; i < 30; i++) {
+      s = await state();
+      animated = s.animatedStrokes;
+      if (animated === 6) break;
+      await delay(100);
+    }
+    assert(
+      animated === 6,
+      `give-up reveal should render all 6 strokes (got ${animated})`,
+    );
+    assert(
+      s.currentFlash === 0,
+      'the current-stroke flash must wait for the reveal to finish',
+      s,
+    );
+    await shot('step11-giveup-animation-end');
+
+    // --- step 12: the current (first) stroke flashes ----------------------
+    for (let i = 0; i < 30; i++) {
+      s = await state();
+      if (s.currentFlash === 1) break;
+      await delay(150);
+    }
+    assert(
+      s.currentFlash === 1 && s.isGuided,
+      'after the reveal the current stroke must flash',
+      s,
+    );
+    await shot('step12-current-stroke-flash');
+
+    // --- step 13: a missed stroke flashes red -----------------------------
+    // Freeze the flash (huge timeout) so the golden can't race the timer.
+    await h('h.setWrongFlashMs(600000)');
+    await h('h.drawWrong()');
+    s = await state();
+    assert(
+      s.wrongInk === 1 &&
+        s.totalMistakes === 1 &&
+        s.view.strokeMistakes === 1 &&
+        !s.hintShown,
+      'missed practice stroke must flash red, count, and never show a hint',
+      s,
+    );
+    await shot('step13-wrong-stroke-flash');
+    await h('h.clearWrongInk()');
+    await h('h.setWrongFlashMs(250)');
+    s = await state();
+    assert(s.wrongInk === 0, 'cleared wrong-stroke flash should be gone', s);
+
+    // --- step 14: a traced stroke turns green, the next one flashes -------
+    await h('h.drawCorrect(0)');
+    s = await state();
+    assert(
+      s.strokeIndex === 1 && s.currentFlash === 1 && s.doneStrokes === 1,
+      'traced stroke must turn green and flash the NEXT stroke',
+      s,
+    );
+    await shot('step14-traced-stroke-green');
+
+    // --- step 15: every stroke practiced (held before the replay) ---------
+    for (let i = 1; i < 5; i++) await h(`h.drawCorrect(${i})`);
+    // Freeze the pre-replay pause so the fully-traced frame is stable.
+    await h('h.setReplayPause(600000)');
+    await h('h.drawCorrect(5)');
+    s = await state();
+    assert(
+      s.events.filter((e: any) => e.type === 'practiceComplete').length === 1 &&
+        s.events.filter((e: any) => e.type === 'complete').length === 0 &&
+        !s.isGuided &&
+        s.isComplete &&
+        s.currentFlash === 0 &&
+        s.doneStrokes === 6,
+      'practicing every stroke must hold the traced character, not complete',
+      s,
+    );
+    await shot('step15-practice-complete');
+
+    // --- step 16: the replay animation gives one more hint ----------------
+    // Freeze the replay after its first stroke so the frame is stable.
+    await h('h.setReplayMs(600000)');
+    await h('h.beginReplay()');
+    animated = 0;
+    for (let i = 0; i < 20; i++) {
+      s = await state();
+      animated = s.animatedStrokes;
+      if (animated === 1) break;
+      await delay(200);
+    }
+    assert(
+      animated === 1 && s.doneStrokes === 0,
+      'replay should show its first stroke and clear the traced strokes',
+      s,
+    );
+    await shot('step16-replay-hint');
+
+    // --- step 17: self-test — a matched stroke appears on the blank board -
+    await h('h.finishReplay()');
+    s = await state();
+    assert(
+      !s.isComplete &&
+        s.strokeIndex === 0 &&
+        s.outlineStrokes === 0 &&
+        s.animatedStrokes === 0 &&
+        s.doneStrokes === 0 &&
+        s.currentFlash === 0,
+      'the self-test must start over on a blank board',
+      s,
+    );
+    await h('h.drawCorrect(0)');
+    s = await state();
+    assert(
+      s.strokeIndex === 1 && s.doneStrokes === 1,
+      'a matched self-test stroke must render on the blank board',
+      s,
+    );
+    await shot('step17-selftest-stroke');
+
+    // --- step 18: all strokes correct -> drawing-area edge highlight ------
+    for (let i = 1; i < 6; i++) await h(`h.drawCorrect(${i})`);
+    s = await state();
+    assert(
+      s.isComplete &&
+        s.events.filter((e: any) => e.type === 'complete').length === 1 &&
+        s.svgComplete === true,
+      'finishing the self-test must highlight the drawing-area edge',
+      s,
+    );
+    assert(
+      s.completionText === null &&
+        s.events.filter((e: any) => e.type === 'historyAppend').length === 0,
+      'grading must wait for the tone pick',
+      s,
+    );
+    await shot('step18-selftest-complete');
+
+    // --- step 19: correct tone -> completion page, then auto-advance ------
+    await h('h.clickCorrectTone()');
+    for (let i = 0; i < 20; i++) {
+      s = await state();
+      if (s.completionText) break;
+      await delay(150);
+    }
+    assert(
+      !!s.completionText &&
+        s.completionText.includes('You have completed 好 (good)') &&
+        s.completionText.includes('Your score was 0'),
+      'the completion page must show the character, definition and score',
+      s,
+    );
+    const appended = s.events.filter((e: any) => e.type === 'historyAppend');
+    assert(
+      appended.length === 1 &&
+        appended[0].detail.id === 'dddddddd' &&
+        appended[0].detail.score === 0,
+      'the attempt must be graded 0 (Give Up) and appended to history',
+      s.events,
+    );
+    await shot('step19-completion-page');
+
+    // After 2.5s the page fades away and the next character loads.
+    for (let i = 0; i < 30; i++) {
+      s = await state();
+      if (!s.completionText && s.view.currentCharacter === '汉') break;
+      await delay(300);
+    }
+    assert(
+      s.completionText === null &&
+        s.view.currentCharacter === '汉' &&
+        s.view.meaning === 'Meaning: Chinese',
+      'the completion page must fade into the next due character',
+      s,
+    );
 
     log('Component steps complete!');
     await browser.disconnect();

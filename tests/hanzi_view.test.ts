@@ -238,9 +238,12 @@ describe('HanziPracticeView', () => {
 
   describe('handleQuizComplete grading', () => {
     beforeEach(async () => {
+      jest.useFakeTimers();
       noticeMessages.length = 0;
       await openWith(HANZI);
     });
+
+    afterEach(() => jest.useRealTimers());
 
     const complete = async (totalMistakes: number) => {
       await view.handleQuizComplete({character: '好', totalMistakes});
@@ -263,6 +266,76 @@ describe('HanziPracticeView', () => {
     it('locks the grade to 0 after Give Up', async () => {
       view.handleGiveUp();
       expect(await complete(0)).toBe(0);
+    });
+
+    it('shows the completion page, then fades into the next card', async () => {
+      await complete(1);
+      const summary = content().querySelector(
+        '.hanzi-complete-summary',
+      ) as HTMLElement;
+      expect(summary.textContent).toContain('You have completed 好 (good)');
+      expect(summary.textContent).toContain('Your score was 4');
+      expect(nextDue).toHaveBeenCalledTimes(1); // onOpen only — no advance yet
+
+      await jest.advanceTimersByTimeAsync(2500);
+      expect(summary.style.opacity).toBe('0'); // fading away
+      await jest.advanceTimersByTimeAsync(400);
+      expect(nextDue).toHaveBeenCalledTimes(2); // advanced to the next card
+    });
+  });
+
+  describe('tone gating', () => {
+    beforeEach(async () => {
+      jest.useFakeTimers();
+      await openWith(HANZI);
+      appendResult.mockClear();
+    });
+
+    afterEach(() => jest.useRealTimers());
+
+    const finishStrokes = () => {
+      (
+        view as never as {
+          strokeSummary: unknown;
+          maybeFinishAttempt: () => void;
+        }
+      ).strokeSummary = {character: '好', totalMistakes: 0};
+      (view as never as {maybeFinishAttempt: () => void}).maybeFinishAttempt();
+    };
+
+    it('waits for the tone pick before grading', async () => {
+      finishStrokes();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(appendResult).not.toHaveBeenCalled();
+      expect(content().querySelector('.hanzi-complete-summary')).toBeNull();
+
+      // hǎo = prettified hao3 — the correct tone option.
+      const correct = Array.from(
+        content().querySelectorAll('.tone-selector button'),
+      ).find(b => b.textContent === 'hǎo') as HTMLElement;
+      correct.dispatchEvent(new MouseEvent('click'));
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(appendResult).toHaveBeenCalledWith(
+        expect.anything(),
+        'history.md',
+        HANZI,
+        5,
+      );
+      expect(content().querySelector('.hanzi-complete-summary')).not.toBeNull();
+    });
+
+    it('grades immediately when the tone was answered first', async () => {
+      const correct = Array.from(
+        content().querySelectorAll('.tone-selector button'),
+      ).find(b => b.textContent === 'hǎo') as HTMLElement;
+      correct.dispatchEvent(new MouseEvent('click'));
+      await jest.advanceTimersByTimeAsync(0);
+      expect(appendResult).not.toHaveBeenCalled(); // strokes still pending
+
+      finishStrokes();
+      await jest.advanceTimersByTimeAsync(0);
+      expect(appendResult).toHaveBeenCalledTimes(1);
     });
   });
 });

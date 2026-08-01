@@ -46,11 +46,19 @@ hotkeys/history.
   (appends history, advances); an empty non-Hanzi bank shows `.practice-empty`. Hanzi cards: picks the next due char, reads
   its **cached** pinyin + English def **from the practice list** (never CEDICT), renders the
   `Meaning:` line (`.hanzi-meaning`) + `PinyinSelector` (`.tone-selector`) + the quiz writer's
-  draw box, grades on quiz complete, appends to history, then reopens for the next char. Gets
+  draw box. **Grading is gated on BOTH parts** (`maybeFinishAttempt`): the writer's
+  `onComplete` stores `strokeSummary` (the writer shows a green drawing-area edge), the tone
+  pick sets `toneDone`, and only when both are in (tone skipped when the entry has no
+  pinyin) does `handleQuizComplete` run — append to history, then show the completion page
+  (`.hanzi-complete-summary`: "You have completed <char> (<def>). Your score was <n>"),
+  which fades after 2.5s (timers in `advanceTimers`, cleared on re-render/close) and loads
+  the next due card. Gets
   the char's stroke data from `plugin.getStrokeData()` (lazy, cached; `.hanzi-no-stroke-data`
   message if the char isn't in the database). Two controls under the draw box: **Give Up**
-  (reveals outline + animation; sets a `gaveUp` flag so the attempt scores **0** even if the
-  user then traces every stroke correctly) and **Mix Up** (`.hanzi-mix-up`;
+  (starts the writer's guided practice: outline + animation revealed, the current stroke
+  flashes while the user traces every stroke, then the writer replays the animation and
+  resets to an unguided pass the user must complete; a `gaveUp` flag locks the score to
+  **0** regardless) and **Mix Up** (`.hanzi-mix-up`;
   `HistoryManager.getMixUpEntry` swaps in a random *different* character whose average SR
   score is within 0.5 of the current one, else `Notice` "No other character with valid score
   range").
@@ -64,7 +72,22 @@ hotkeys/history.
   the stroke DB, drawn in a data-space-transformed `<g>`; the animation sweeps a fat median
   stroke inside a `clipPath` of the outline — hanzi-writer's technique), falling back to a
   round-capped median polyline for strokes with no outline;
-  `showOutline()`/`animateCharacter()` back the Give Up flow.
+  `showOutline()`/`animateCharacter()`/`startGuidedPractice()` back the Give Up flow.
+  Guided practice (`startGuidedPractice`) plays the reveal animation first, THEN flashes the
+  stroke to draw next (`.hanzi-stroke-current`, orange, opacity keyframes shipped in a
+  `<style>` INSIDE the SVG so it renders identically anywhere the writer mounts) and
+  suppresses the miss hint; a traced stroke renders GREEN (`#4CAF50`, same green as the
+  completion edge, over the dark revealed glyph) to mark it done; tracing the last stroke
+  fires `onPracticeComplete`, holds the all-green
+  frame (`replayPauseMs`, public test knob), replays the animation (`replayPerStrokeMs`/
+  stroke, also used for the reveal), then clears the board and restarts the still-active
+  quiz unguided — `onComplete` only fires after that self-test pass, and it marks the SVG
+  `.hanzi-quiz-complete` (green edge = stroke portion finished). In ANY mode a rejected
+  stroke's ink flashes red (`.hanzi-user-stroke-wrong`, removed after `wrongFlashMs` (250ms
+  default, public test knob) or on the next pointerdown) instead of vanishing silently.
+  **Every pointer/touch handler calls `stopPropagation()`** — a stroke that bubbles to the
+  app is interpreted by Obsidian mobile as the swipe-down command-menu gesture (the
+  component runner's bubble probe asserts nothing escapes the SVG).
   `stroke_matcher.ts` is a simplified port of hanzi-writer's `strokeMatches` (same five checks
   + thresholds: avg distance ≤350 (×0.5 after stroke 0), start/end ≤250, direction cosine >0,
   normalized-Fréchet ≤0.4, length ratio ≥0.35) except avg distance is measured to median
@@ -368,10 +391,17 @@ Then re-run `npm run test:e2e:docker` and confirm every `[visual]` line reports 
    third miss must show the hint highlight (`.hanzi-stroke-hint`) — screenshotted as the
    `step6-stroke-hint` golden — then the correct stroke is drawn by replaying
    `writer.getStrokeDisplayPoints(0)` and must be accepted (index advances, hint clears,
-   `.hanzi-stroke-done` renders). Full-quiz grading is then **simulated**
-   (`handleQuizComplete` called directly) to exercise history writing.
-7. `hanzi-practice-history.md` gets the graded line (`<id> 好 (hao3): <score>` — the grading
-   simulation sets `view.currentEntry` from the words-file line read at step 5).
+   `.hanzi-stroke-done` renders).
+6c. The remaining 5 strokes are drawn correctly (real mouse): the writer must complete and
+   highlight the drawing-area edge (`svg.hanzi-quiz-complete`, green) but must NOT grade
+   yet — grading waits for the tone pick (`step6c-strokes-complete` golden).
+6d. Clicking the correct tone (`prettifyPinyin(haoPinyin)` button) must show the completion
+   page (`.hanzi-complete-summary`: "You have completed 好 (<def>). Your score was 1" — 3
+   stroke mistakes on 6 strokes → base 1; tone right first try) — golden
+   `step6d-completion-page` — then after ~2.5s it must fade and load the next due character
+   (asserted via `view.currentCharacter` changing), screenshotted as `step6-graded`.
+7. `hanzi-practice-history.md` gets the real graded line (`<id> 好 (hao3): 1`; the entry id
+   comes from the words-file line read at step 5).
 7b. `edit-hanzi-bank` modal lists all 3 entries (`.hanzi-bank-row`); clicking 字's
    `.hanzi-bank-remove` drops the row and rewrites the words file without 字 (好/汉 intact).
 8. Settings tab opens.
@@ -509,18 +539,25 @@ npm run test:e2e:docker:mobile   # headless in the container
 
 ---
 
-## Component golden test — the quiz writer in isolation
+## Component golden test — the quiz writer + practice view in isolation
 
-`tests/component_runner.ts` + `tests/component_harness.ts` test ONLY `src/writer` + `src/data`,
-with no plugin, vault content, or Obsidian UI in frame. The runner launches the extracted
-Obsidian AppImage purely as a Chromium host (empty vault → no trust prompt; port **9226** +
-`/tmp/obsidian-component-profile`, separate from the E2E's so the suites can't
-single-instance-lock each other), clears the window body, injects the bundled harness
-(`tests/component_harness.js`), and mounts a lone `HanziQuizWriter` on a fixed 320px white
-stage fed with the REAL shipped `dist/hanzi-strokes.bin.gz` (gunzipped in node → base64 →
-`StrokeDataReader` in page). All input is synthetic pointer events at fixed coordinates and
-every screenshot is **clipped to the stage**, so goldens contain nothing but the component —
-pixel-stable and font-free.
+`tests/component_runner.ts` + `tests/component_harness.ts` test `src/writer` + `src/data` and
+the full `HanziPracticeView`, with no real plugin or vault content in frame. The runner
+launches the extracted Obsidian AppImage purely as a Chromium host (empty vault → no trust
+prompt; port **9226** + `/tmp/obsidian-component-profile`, separate from the E2E's so the
+suites can't single-instance-lock each other), clears the window body, injects the bundled
+harness (`tests/component_harness.js`), and mounts either a lone `HanziQuizWriter` on a fixed
+320px white stage (`mount`) or the whole practice view — heading, meaning line, tone
+selector, writer, Give Up/Mix Up — with a stubbed plugin (`mountView`; grading is captured as
+a `viewGraded` event instead of touching a vault, and the shuffled tone buttons are DOM-sorted
+before shots). Both are fed the REAL shipped `dist/hanzi-strokes.bin.gz` (gunzipped in node →
+base64 → `StrokeDataReader` in page). The harness bundle **aliases `obsidian` to
+`tests/obsidian_browser_stub.ts`** (a jest-free sibling of `tests/__mocks__/obsidian.ts`; the
+build needs `--tsconfig=tsconfig.json` or the `file:`-dep decorators in standard-obsidian-lib
+pass through untransformed and break script injection) — Obsidian's global DOM helpers come
+from the real window. All input is synthetic pointer events at fixed coordinates and every
+screenshot is **clipped to the stage**, so goldens contain nothing but the component —
+pixel-stable.
 
 ```bash
 npm run test:component                  # host (opens a window)
@@ -529,13 +566,28 @@ npm run test:component:docker          # headless in the container
 npm run test:component:docker:goldens  # regenerate container goldens (docker/__golden__)
 ```
 
-Golden states (`component-*.png`, in `tests/__goldens__` / `docker/__golden__` alongside the
-E2E's, **prefix-scoped**: each runner's `E2E_REGEN_GOLDENS=1` only deletes its own prefix):
-`empty`, `ink` (mid-stroke, pointer held down), `hint` (3 misses on stroke 0), `progress`
-(3 strokes accepted), `complete`, `outline`, `animation-start` (transitions disabled + huge
-per-stroke delay ⇒ deterministic first-stroke-only frame), `animation-end`. Functional
-assertions (mistake counts, hint show/clear, `onMistake`/`onCorrectStroke`/`onComplete`
-payloads, animated-stroke counts) are the source of truth; pixel diffs stay advisory
+Golden states (`component-stepNN-*.png`, in `tests/__goldens__` / `docker/__golden__`
+alongside the E2E's, **prefix-scoped**: each runner's `E2E_REGEN_GOLDENS=1` only deletes its
+own prefix). **All goldens carry a step number = capture order** (user preference — order
+must be readable from the filename). Writer-only, steps 01–08: `empty`, `ink` (mid-stroke,
+pointer held down), `hint` (3 misses on stroke 0; shot after the 250ms red miss-flash
+clears), `progress`, `complete` (green drawing-area edge), `outline`, `animation-start`
+(transitions disabled + huge per-stroke delay ⇒ deterministic first-stroke-only frame),
+`animation-end`. Full view, steps 09–19 (the Give Up practice narrative):
+`view-initial`, `giveup-animation-start`/`-end` (reveal animation, flash suppressed until it
+finishes), `current-stroke-flash`, `wrong-stroke-flash` (`setWrongFlashMs(600000)` freezes
+it), `traced-stroke-green` (practiced stroke turns green, next flashes),
+`practice-complete` (`setReplayPause(600000)` holds the all-green frame), `replay-hint`
+(`beginReplay()` + `setReplayMs(600000)` freezes the first frame), `selftest-stroke`
+(`finishReplay()` → blank board, first matched stroke), `selftest-complete` (green edge, NOT
+graded yet — the tone gates grading), `completion-page` (`clickCorrectTone()` → "You have
+completed 好 (good). Your score was 0"); then the fade into the next card (汉 from the
+patched `getNextDueEntry`) is asserted functionally. The runner also proves the
+swipe-bubbling fix: a bubble probe on `document.body` must count 0 pointer/touch events
+escaping the SVG (`installBubbleProbe`/`probeTouch`). Functional assertions (mistake counts,
+hint show/clear, `onMistake`/`onCorrectStroke`/`onComplete`/`onPracticeComplete` payloads,
+animated-stroke counts, the self-test reset, `historyAppend` score capture) are the source
+of truth; pixel diffs stay advisory
 (`E2E_STRICT_VISUAL=1` to make them fatal), with a tighter 100px-diff warning threshold since
 the clips are small. Validate with `grep RESULT: component-run.log` → `RESULT: PASS`; debug via
 `dumps-component/` (`component-run.log` and `dumps-component/` are copied to

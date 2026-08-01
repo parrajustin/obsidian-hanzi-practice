@@ -43,6 +43,14 @@ export class HanziPracticeView extends ItemView {
   private pinyinMistakes = 0;
   /** Once Give Up is pressed, the attempt can only ever score 0. */
   private gaveUp = false;
+  /** The finished quiz's summary; grading waits until the tone is also done. */
+  private strokeSummary: {character: string; totalMistakes: number} | null =
+    null;
+  /** Whether this card quizzes the tone, and whether it has been answered. */
+  private toneRequired = false;
+  private toneDone = false;
+  /** Completion-page timers (fade + advance); cleared on re-render/close. */
+  private advanceTimers: number[] = [];
   private plugin: HanziPracticePlugin;
 
   constructor(leaf: WorkspaceLeaf, plugin: HanziPracticePlugin) {
@@ -101,9 +109,13 @@ export class HanziPracticeView extends ItemView {
   /** (Re)build the whole practice UI for one entry (null = no bank yet). */
   private async renderPractice(nextEntry: PracticeEntry | null) {
     // Stop any give-up animation timers from a previous writer before its
-    // SVG is torn down.
+    // SVG is torn down, and any pending completion-page advance.
+    this.clearAdvanceTimers();
     this.writer?.destroy();
     this.writer = null;
+    this.strokeSummary = null;
+    this.toneRequired = false;
+    this.toneDone = false;
     const container = this.containerEl.children[1];
     container.empty();
     this.currentEntry = nextEntry;
@@ -155,11 +167,14 @@ export class HanziPracticeView extends ItemView {
 
     // Only show the tone quiz when the character has a cached pinyin.
     if (this.targetPinyin) {
+      this.toneRequired = true;
       const selector = new PinyinSelector(
         toneSelectContainer,
         this.targetPinyin,
         mistakes => {
           this.pinyinMistakes = mistakes;
+          this.toneDone = true;
+          this.maybeFinishAttempt();
         },
       );
       selector.render();
@@ -289,22 +304,35 @@ export class HanziPracticeView extends ItemView {
     this.strokeMistakes = 0;
     this.pinyinMistakes = 0;
     this.gaveUp = false;
+    this.strokeSummary = null;
     this.writer?.quiz({
       onMistake: () => {
         this.strokeMistakes++;
       },
       onComplete: summaryData => {
-        void this.handleQuizComplete(summaryData);
+        // The stroke portion is done (the writer highlights the drawing
+        // area's edge); grading waits until the tone is also answered.
+        this.strokeSummary = summaryData;
+        this.maybeFinishAttempt();
       },
     });
   }
 
+  /** Grade once BOTH the strokes and the tone (when quizzed) are finished. */
+  private maybeFinishAttempt() {
+    if (!this.strokeSummary) return;
+    if (this.toneRequired && !this.toneDone) return;
+    void this.handleQuizComplete(this.strokeSummary);
+  }
+
   handleGiveUp() {
-    // Show the full character, then animate it stroke by stroke. The user can
-    // still trace the guided strokes to finish, but the score is locked to 0.
+    // Reveal the character (animated stroke by stroke) and enter guided
+    // practice: the current stroke flashes while the user traces each one.
+    // After the last traced stroke the writer replays the animation and the
+    // user must draw the whole character unguided before the quiz completes —
+    // but the score stays locked to 0.
     this.gaveUp = true;
-    this.writer?.showOutline();
-    this.writer?.animateCharacter();
+    this.writer?.startGuidedPractice();
   }
 
   /**
@@ -366,11 +394,48 @@ export class HanziPracticeView extends ItemView {
       finalScore,
     );
 
-    // Refresh view for next card
-    void this.loadNext();
+    // Show the completion page; it fades after 2.5s, then the next card
+    // loads.
+    this.showCompletionPage(finalScore);
+  }
+
+  /**
+   * "You have completed <char> (<definition>). Your score was <n>" — shown
+   * for 2.5s, then faded out, then the view advances to the next due card.
+   */
+  private showCompletionPage(score: number) {
+    this.writer?.destroy();
+    this.writer = null;
+    const container = this.containerEl.children[1];
+    container.empty();
+    const page = container.createDiv({cls: 'hanzi-complete-summary'});
+    const label = this.englishDef
+      ? `${this.currentCharacter} (${this.englishDef})`
+      : this.currentCharacter;
+    page.createEl('h2', {text: `You have completed ${label}`});
+    page.createEl('p', {
+      text: `Your score was ${score}`,
+      cls: 'hanzi-complete-score',
+    });
+    page.style.opacity = '1';
+    page.style.transition = 'opacity 0.4s ease';
+    this.advanceTimers.push(
+      window.setTimeout(() => {
+        page.style.opacity = '0';
+      }, 2500),
+      window.setTimeout(() => {
+        void this.loadNext();
+      }, 2900),
+    );
+  }
+
+  private clearAdvanceTimers() {
+    for (const t of this.advanceTimers) window.clearTimeout(t);
+    this.advanceTimers = [];
   }
 
   async onClose() {
+    this.clearAdvanceTimers();
     this.writer?.destroy();
     this.writer = null;
   }
