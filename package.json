@@ -1,6 +1,6 @@
 {
   "name": "obsidian-hanzi-practice",
-  "version": "3.0.0",
+  "version": "3.0.1",
   "description": "Hanzi character practice plugin for Obsidian",
   "main": "main.js",
   "scripts": {
