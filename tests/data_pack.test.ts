@@ -1,9 +1,20 @@
+import {App} from 'obsidian';
+import {FileUtil} from 'standard-obsidian-lib/src/filesystem/file_util';
+import {Err, Ok} from 'standard-ts-lib/src/result';
+import {NotFoundError} from 'standard-ts-lib/src/status_error';
+import {TextEncoder, TextDecoder} from 'util';
 import {
   DataPack,
+  loadDataPack,
   mergeDataPackBanks,
   parseDataPack,
 } from '../src/utils/data_pack';
 import {HANZI_BANK} from '../src/utils/practice_list';
+
+global.TextEncoder = TextEncoder;
+global.TextDecoder = TextDecoder as any;
+
+jest.mock('standard-obsidian-lib/src/filesystem/file_util');
 
 function pack(banks: DataPack['banks'], name?: string): DataPack {
   return {version: 1, name, banks};
@@ -70,6 +81,51 @@ describe('parseDataPack', () => {
     const result = parseDataPack(
       JSON.stringify({version: 1, banks: [{name: '', filePath: 'a.md'}]}),
     );
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('loadDataPack', () => {
+  beforeEach(() => jest.clearAllMocks());
+
+  it('reads and parses a registered pack JSON from the vault', async () => {
+    (FileUtil.fetchFile as jest.Mock).mockResolvedValue(
+      Ok(
+        new TextEncoder().encode(
+          JSON.stringify({
+            version: 1,
+            banks: [{name: 'German', filePath: 'german-cards.md'}],
+          }),
+        ),
+      ),
+    );
+    const result = await loadDataPack(new App(), 'german-pack.json');
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.val.banks).toEqual([
+        {name: 'German', filePath: 'german-cards.md'},
+      ]);
+    }
+    expect(FileUtil.fetchFile).toHaveBeenCalledWith(
+      expect.anything(),
+      'german-pack.json',
+      expect.anything(),
+    );
+  });
+
+  it('bubbles a missing-file error', async () => {
+    (FileUtil.fetchFile as jest.Mock).mockResolvedValue(
+      Err(NotFoundError('no such file')),
+    );
+    const result = await loadDataPack(new App(), 'missing.json');
+    expect(result.ok).toBe(false);
+  });
+
+  it('bubbles a malformed-JSON error', async () => {
+    (FileUtil.fetchFile as jest.Mock).mockResolvedValue(
+      Ok(new TextEncoder().encode('not json at all')),
+    );
+    const result = await loadDataPack(new App(), 'broken.json');
     expect(result.ok).toBe(false);
   });
 });

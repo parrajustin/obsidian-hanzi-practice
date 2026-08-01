@@ -1,13 +1,15 @@
 import {App, ButtonComponent, Modal, Notice, Setting, TFile} from 'obsidian';
 import HanziPracticePlugin from '../main';
-import {BankConfig, HanziPluginSettings} from '../settings';
+import {HanziPluginSettings, resolveBankSources} from '../settings';
 import {
+  BankSource,
   CardType,
   computeClozeId,
   computeFlashcardId,
   computeMultiChoiceId,
   computeTrueFalseId,
   formatPracticeEntry,
+  HANZI_BANK,
   parseClozeSegments,
   parsePracticeList,
   PracticeEntry,
@@ -37,7 +39,7 @@ import {
  * entered in one sitting (text fields clear; bank + type + toggle stick).
  */
 export class AddFlashcardModal extends Modal {
-  private bank: BankConfig | null = null;
+  private bank: BankSource | null = null;
   private cardType: CardType = CardType.FLASHCARD;
   private front = '';
   private back = '';
@@ -64,11 +66,22 @@ export class AddFlashcardModal extends Modal {
   }
 
   onOpen() {
+    void this.renderContent();
+  }
+
+  /**
+   * Banks come from the resolver (manual banks + every registered data
+   * pack's banks — cards can be added to pack banks too, since those are
+   * ordinary card files); only the built-in Hanzi bank is excluded (its
+   * cards go through the add-character modal).
+   */
+  private async renderContent() {
     const {contentEl} = this;
     contentEl.empty();
     contentEl.createEl('h2', {text: 'Add Card'});
 
-    const banks = this.settings.banks;
+    const resolved = await resolveBankSources(this.app, this.settings);
+    const banks = resolved.sources.filter(s => s.name !== HANZI_BANK);
     if (banks.length === 0) {
       contentEl.createEl('p', {
         cls: 'flash-no-banks',

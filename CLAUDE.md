@@ -214,24 +214,34 @@ hotkeys/history.
   bank** (`getNextDueEntry(app, historyPath, sources, bank)` — senses of the same char
   schedule independently; `getMixUpEntry` is hanzi-only and stays in the current bank).
 - `src/spaced_repetition.ts` — SR scheduling (see below).
-- `src/settings.ts` — Zod-schema settings, now **v1** (SchemaManager migration from v0 adds
-  `banks: []`): `historyFilePath`, `practiceFilePath` (the Hanzi bank's file), and
-  `banks: {name, filePath}[]` — **each bank stores its cards in its own file**, exactly like
-  the Hanzi bank's words file. `bankSources(settings)` flattens that into the `BankSource[]`
-  (Hanzi first) that all read paths consume. The settings tab's "Practice Banks" section is a
+- `src/settings.ts` — Zod-schema settings, now **v2** (SchemaManager migrations: v0→v1 adds
+  `banks: []`, v1→v2 adds `dataPacks: []`): `historyFilePath`, `practiceFilePath` (the Hanzi
+  bank's file), `banks: {name, filePath}[]` (**each bank stores its cards in its own file**,
+  exactly like the Hanzi bank's words file), and `dataPacks: {filePath}[]` — **registered
+  data packs, stored as the vault PATH of their JSON only, never their banks**.
+  `resolveBankSources(app, settings)` (async) is what all read paths consume: Hanzi first,
+  then manual banks, then each pack's banks **re-read from its JSON file on every call** —
+  so an edited/synced/updated pack JSON changes the banks at the next plugin start (or view
+  open) with no re-import; it returns `{sources, packErrors}` (a broken pack contributes no
+  banks, never throws — callers surface `packErrors` as Notices where it makes sense).
+  The settings tab's "Practice Banks" section is a
   LIST — one row per bank (`.hanzi-bank-row-setting`: name `.hanzi-bank-name` + file path
   `.hanzi-bank-path` text fields and a trash `.hanzi-bank-delete` remove button that only
   drops the config, never the file) — plus an "Add Bank" button (`.hanzi-bank-add`) that
-  appends a row. **`hide()` (settings closed) re-parses every bank file** and shows a Notice
-  with per-bank card counts, so path edits take effect (and typos surface) immediately.
-  A **Data Packs** section imports a pack JSON (`Import` button `.hanzi-pack-import` driving a
-  hidden file input `.hanzi-pack-file-input`; web File API only — mobile-safe): the pack's
-  banks merge into `settings.banks` **by name** (add / re-point path / unchanged; the reserved
-  name `Hanzi` is skipped) via `src/utils/data_pack.ts` (`parseDataPack` = WrapToResult'd
-  JSON.parse + zod v1 schema `{version: 1, name?, banks: {name, filePath}[], rules?}` —
-  `rules` is reserved/ignored, unknown keys stripped; `mergeDataPackBanks` is pure/non-mutating).
-  User-facing format doc: `CARD_FORMATS.md` (card line format per type, bank loading, data
-  packs — keep it in sync with format changes).
+  appends a row. The **Data Packs** section is the same shape: one row per registered pack
+  (`.hanzi-pack-row-setting`: path `.hanzi-pack-path` text field + trash `.hanzi-pack-delete`
+  that only unregisters) — packs are ADDED via the `Import` button (`.hanzi-pack-import`
+  driving hidden file input `.hanzi-pack-file-input`; web File API only — mobile-safe), which
+  `installDataPack`s the picked JSON: validate → **copy it into the vault at the picked file's
+  name** (re-import = overwrite/update) → register the path. **`hide()` (settings closed)
+  re-resolves and re-parses every bank file** and shows a Notice with per-bank card counts
+  (plus one per unreadable pack), so path edits take effect (and typos surface) immediately.
+  `src/utils/data_pack.ts`: `parseDataPack` = WrapToResult'd JSON.parse + zod v1 pack schema
+  `{version: 1, name?, banks: {name, filePath}[], rules?}` (`rules` reserved/ignored, unknown
+  keys stripped); `loadDataPack(app, path)` reads a pack from the vault; `mergeDataPackBanks`
+  (pure/non-mutating) merges pack banks by name (add / re-point path / unchanged; the
+  reserved name `Hanzi` is skipped). User-facing format doc: `CARD_FORMATS.md` (card line
+  format per type, bank loading, data packs — keep it in sync with format changes).
 - Depends on sibling repos `../standard-obsidian-lib` and `../standard-ts-lib` (`file:` deps).
   `FileUtil.fetchFile(app, path, RAW)` reads via `app.vault.adapter.readBinary` (vault-root
   relative); `OBSIDIAN` type reads via the vault API.
@@ -351,11 +361,12 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
    `jest.config.js` are ignored. `npm run lint:fix` / `npm run format` to auto-fix — but beware:
    `eslint . --fix` on *unformatted* code once produced broken output from overlapping fixes;
    run `npm run format` (plain prettier) first, then `lint:fix`.
-3. `test:unit` — `npx jest`: 238 tests across 22 suites — the data layer
+3. `test:unit` — `npx jest`: 258 tests across 22 suites — the data layer
    (`practice_list` / `card_markdown_roundtrip` (per-card-type markdown save/load round-trips
    pinning the CARD_FORMATS.md format) / `data_pack` (pack JSON parse + bank merge) /
    `example_data_packs` (loads the shipped `examples/data-packs/*.json` + linked card files
-   from disk and imports each through the settings file picker — keeps the examples valid) /
+   from disk, installs each through the settings file picker, and resolves banks from the
+   registered packs — keeps the examples valid) /
    `history_manager` / `spaced_repetition` / `stroke_codec` (HZS2
    round-trip incl. negative + astral-plane chars) / `stroke_matcher` (accepts median replay
    + jitter, rejects backwards/wrong/far strokes) / `cedict_parser` + the node-env loaders

@@ -162,10 +162,11 @@ export default class HanziPracticePlugin extends Plugin {
       this.settings = defRes.ok
         ? defRes.val
         : {
-            version: 1,
+            version: 2,
             historyFilePath: 'history.md',
             practiceFilePath: 'practice.md',
             banks: [],
+            dataPacks: [],
           };
     }
   }

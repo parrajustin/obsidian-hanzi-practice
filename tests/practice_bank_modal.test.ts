@@ -57,7 +57,8 @@ describe('PracticeBankModal', () => {
           {name: 'Capitals', filePath: 'capitals.md'},
           {name: 'German', filePath: 'german.md'},
         ],
-        version: 1,
+        dataPacks: [],
+        version: 2,
       },
       activateView,
     } as never;

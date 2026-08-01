@@ -22,9 +22,11 @@ To try one in a real vault:
 1. Copy the `packs/` folder into your vault root (the pack `filePath`s are
    vault-relative).
 2. In Obsidian: *Settings → Hanzi Practice → Data Packs → Import*, pick the
-   pack's `.json` file.
-3. The banks appear under *Practice Banks* and are immediately practicable
-   via the `practice` command.
+   pack's `.json` file. Importing copies the JSON into the vault and
+   registers its path — the banks are read from that file, so editing or
+   syncing an updated JSON refreshes them automatically on the next plugin
+   start.
+3. The pack's banks are immediately practicable via the `practice` command.
 
 These files are also loaded by `tests/example_data_packs.test.ts`, so they
 are guaranteed to stay valid as the formats evolve.

@@ -67,10 +67,11 @@ describe('HanziPracticeView', () => {
     const plugin = {
       app: new App(),
       settings: {
-        version: 1,
+        version: 2,
         historyFilePath: 'history.md',
         practiceFilePath: 'words.md',
         banks: [],
+        dataPacks: [],
       },
       // No stroke database in unit tests — the view must degrade to the
       // .hanzi-no-stroke-data message instead of constructing a quiz writer.

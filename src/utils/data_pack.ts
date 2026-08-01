@@ -22,6 +22,11 @@
  * `practiceFilePath` setting, not a `banks` entry).
  */
 
+import {App} from 'obsidian';
+import {
+  FileSystemType,
+  FileUtil,
+} from 'standard-obsidian-lib/src/filesystem/file_util';
 import {z} from 'zod';
 import {Err, Ok, Result} from 'standard-ts-lib/src/result';
 import {
@@ -70,6 +75,27 @@ export function parseDataPack(text: string): Result<DataPack, StatusError> {
     );
   }
   return Ok(validated.data);
+}
+
+/**
+ * Read + parse a registered pack's JSON file from the vault. Packs are
+ * registered by path (not copied into the settings), so every load sees the
+ * file's CURRENT content — editing or syncing an updated pack JSON updates
+ * the banks on the next plugin start / bank resolution.
+ */
+export async function loadDataPack(
+  app: App,
+  filePath: string,
+): Promise<Result<DataPack, StatusError>> {
+  const fileResult = await FileUtil.fetchFile(
+    app,
+    filePath,
+    FileSystemType.OBSIDIAN,
+  );
+  if (!fileResult.ok) {
+    return fileResult;
+  }
+  return parseDataPack(new TextDecoder('utf-8').decode(fileResult.val));
 }
 
 export interface DataPackMergeResult {

@@ -131,9 +131,13 @@ long as the id (or the fields it hashes) stays the same.
 ## How banks are loaded
 
 1. The settings produce the **bank source list**: the Hanzi bank's file
-   first, then each configured bank's file (`bankSources` in
-   `src/settings.ts`).
-2. Each file is read from the vault and parsed line by line
+   first, then each manually configured bank's file, then the banks of every
+   **registered data pack** — read fresh from the pack's JSON file
+   (`resolveBankSources` in `src/settings.ts`). Because packs are resolved at
+   read time, editing/syncing an updated pack JSON updates the banks the
+   next time the plugin starts (or a practice view / modal opens) — no
+   re-import needed.
+2. Each bank file is read from the vault and parsed line by line
    (`HistoryManager.loadAllPracticeEntries` →
    `parsePracticeList` in `src/utils/practice_list.ts`).
 3. **The file a card lives in decides its bank** — a line's `bank` tag is
@@ -141,11 +145,13 @@ long as the id (or the fields it hashes) stays the same.
    exception is the Hanzi bank's file: its lines keep their line-level bank
    tags, because that file held every bank's cards before per-bank files
    existed, and that legacy data must stay practicable.
-4. Closing the settings tab re-parses every bank file and shows a per-bank
-   card count, so path typos surface immediately.
+4. Closing the settings tab re-resolves and re-parses every bank file and
+   shows a per-bank card count (plus a notice per unreadable pack), so path
+   typos surface immediately.
 
-A bank configured with a missing file simply loads 0 cards — create the file
-(or import cards into it) and it picks up on the next load.
+A bank configured with a missing file simply loads 0 cards, and a registered
+pack whose JSON is missing or malformed contributes no banks (the rest keep
+working) — fix the file and it picks up on the next load.
 
 ## Data packs (JSON import)
 
@@ -153,6 +159,13 @@ A **data pack** is a JSON file that links practice banks to the markdown
 files holding their cards, so a whole set of banks installs in one click:
 *Settings → Data Packs → Import*, pick the `.json` file. The pack does not
 contain cards — the linked markdown files (in the formats above) do.
+
+Importing **registers the pack, not its banks**: the JSON is copied into the
+vault and only its path is stored in the settings. The pack's banks are
+re-read from that file every time banks are resolved, so when the pack JSON
+is updated later (synced from another device, hand-edited, or replaced by a
+newer pack version), the plugin picks up the changes on its next start
+automatically.
 
 Ready-to-import examples (one per card type plus a combined starter pack,
 kept valid by the test suite) live in
@@ -181,27 +194,34 @@ kept valid by the test suite) live in
 
 Unknown extra keys are ignored (forward compatibility).
 
-### Import semantics
+### Import & registration semantics
 
-Importing merges the pack's banks into *Settings → Practice Banks* **by bank
-name** (implemented in `src/utils/data_pack.ts`):
+Clicking *Import* and picking a `.json` file:
 
-- a name not configured yet → the bank is **added**;
-- a name already configured with a different file path → that bank is
-  **re-pointed** to the pack's path;
-- a name already configured with the same path → **unchanged**;
-- the reserved name `Hanzi` → **skipped** (the built-in Hanzi bank's file is
-  the *Hanzi Practice File Path* setting, never a pack entry).
+1. validates the pack (a malformed pack installs nothing and reports the
+   first validation error);
+2. **copies the JSON into the vault** at the picked file's name (re-importing
+   the same file name just overwrites the vault copy — that is how you push
+   a pack update by hand);
+3. **registers the path** under *Settings → Data Packs*, where each pack is
+   a row like the bank list: an editable path field (point it at any JSON
+   already in your vault) and a remove button that only unregisters — no
+   files are ever deleted.
 
-Nothing is ever deleted by an import, and card files are never written — the
-pack only edits the bank configuration. A confirmation Notice reports the
-added/updated/unchanged/skipped counts; a malformed pack imports nothing and
-reports the first validation error.
+At resolution time each registered pack's banks are merged in **by bank
+name** (implemented in `src/utils/data_pack.ts`): unknown names add a bank,
+a name that matches a manual bank (or an earlier pack's bank) re-points it
+to the pack's file path, and the reserved name `Hanzi` is skipped (the
+built-in Hanzi bank's file is the *Hanzi Practice File Path* setting, never
+a pack entry). Manual banks in *Practice Banks* are unaffected in the
+settings themselves — packs never write to the bank list.
 
 ### Typical workflow
 
 1. Copy the pack's card files (e.g. `packs/capitals-cards.md`) into your
    vault, at the paths the pack's `filePath` entries name.
-2. Copy the pack's `.json` file anywhere on the device.
-3. *Settings → Data Packs → Import*, pick the `.json` — the banks appear in
-   the Practice Banks list and are immediately practicable.
+2. *Settings → Data Packs → Import*, pick the pack's `.json` — it is copied
+   into the vault, registered, and its banks are immediately practicable.
+3. When the pack gets an update (new cards file paths, renamed banks),
+   update the JSON in the vault — sync it, edit it, or re-import the new
+   version. The banks refresh on the next plugin start; nothing else to do.

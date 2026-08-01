@@ -15,11 +15,23 @@ describe('AddFlashcardModal', () => {
   let app: App;
   let modal: AddFlashcardModal;
 
-  const makeModal = (banks: {name: string; filePath: string}[]) => {
+  // Opening renders asynchronously (banks resolve through the data packs),
+  // so the harness awaits a flush before tests touch the DOM.
+  const makeModal = async (banks: {name: string; filePath: string}[]) => {
     app = new App();
-    const plugin = {settings: {banks}} as never;
+    const plugin = {
+      app,
+      settings: {
+        version: 2,
+        historyFilePath: 'history.md',
+        practiceFilePath: 'words.md',
+        banks,
+        dataPacks: [],
+      },
+    } as never;
     modal = new AddFlashcardModal(app, plugin);
     modal.open();
+    await flush();
     return modal;
   };
 
@@ -53,14 +65,14 @@ describe('AddFlashcardModal', () => {
     noticeMessages.length = 0;
   });
 
-  it('shows a pointer to Settings when no banks are configured', () => {
-    makeModal([]);
+  it('shows a pointer to Settings when no banks are configured', async () => {
+    await makeModal([]);
     expect(modal.contentEl.querySelector('.flash-no-banks')).not.toBeNull();
     expect(modal.contentEl.querySelector('.mod-cta')).toBeNull();
   });
 
   it('adds a flashcard line to a fresh bank file', async () => {
-    makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
+    await makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
     setInput(0, 'France');
     setInput(1, 'Paris');
     await clickAdd();
@@ -77,7 +89,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('writes card type 2 when the reversible toggle is on', async () => {
-    makeModal([{name: 'German', filePath: 'german.md'}]);
+    await makeModal([{name: 'German', filePath: 'german.md'}]);
     setInput(0, 'dog');
     setInput(1, 'Hund');
     (
@@ -92,7 +104,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('appends to an existing bank file', async () => {
-    makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
+    await makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
     const file = new TFile();
     (app.vault.getAbstractFileByPath as jest.Mock).mockReturnValue(file);
     (app.vault.read as jest.Mock).mockResolvedValue(
@@ -110,7 +122,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('rejects a duplicate card and keeps the modal state', async () => {
-    makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
+    await makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
     const id = computeFlashcardId('Capitals', 'France', 'Paris');
     const file = new TFile();
     (app.vault.getAbstractFileByPath as jest.Mock).mockReturnValue(file);
@@ -125,7 +137,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('requires both front and back', async () => {
-    makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
+    await makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
     setInput(0, 'France');
     await clickAdd();
     expect(errorText()).toBe('Front and back are both required.');
@@ -133,7 +145,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('adds a multiple-choice card with |-joined distractors', async () => {
-    makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
+    await makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
     selectType(3);
     setInput(0, '你__狗吗？');
     setInput(1, '有没有');
@@ -147,7 +159,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('validates multiple-choice fields', async () => {
-    makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
+    await makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
     selectType(3);
     await clickAdd();
     expect(errorText()).toBe('Question and answer are both required.');
@@ -164,7 +176,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('adds a cloze card and requires a {{blank}}', async () => {
-    makeModal([{name: 'Cloze', filePath: 'cloze.md'}]);
+    await makeModal([{name: 'Cloze', filePath: 'cloze.md'}]);
     selectType(4);
     await clickAdd();
     expect(errorText()).toBe('The sentence is required.');
@@ -185,7 +197,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('adds a true/false card (toggle off = the statement is wrong)', async () => {
-    makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
+    await makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
     selectType(5);
     setInput(0, '你有没有一只狗吗？');
     setInput(1, '有没有 already forms the question — drop the 吗.');
@@ -198,7 +210,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('writes the shared explanation as a trailing field on any type', async () => {
-    makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
+    await makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
     setInput(0, 'France');
     setInput(1, 'Paris');
     setInput(2, 'Think of the Eiffel Tower.');
@@ -211,7 +223,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('writes true when the correct toggle is on, and requires a statement', async () => {
-    makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
+    await makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
     selectType(5);
     await clickAdd();
     expect(errorText()).toBe('The statement is required.');
@@ -229,8 +241,8 @@ describe('AddFlashcardModal', () => {
     );
   });
 
-  it('switching the card type swaps the field set (plus shared Explanation)', () => {
-    makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
+  it('switching the card type swaps the field set (plus shared Explanation)', async () => {
+    await makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
     expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(3);
     expect(
       modal.contentEl.querySelector('.flash-reversible-toggle'),
@@ -248,7 +260,7 @@ describe('AddFlashcardModal', () => {
   });
 
   it('picks the bank from the dropdown', async () => {
-    makeModal([
+    await makeModal([
       {name: 'A', filePath: 'a.md'},
       {name: 'B', filePath: 'b.md'},
     ]);
@@ -266,8 +278,8 @@ describe('AddFlashcardModal', () => {
     );
   });
 
-  it('clears the content on close', () => {
-    makeModal([{name: 'A', filePath: 'a.md'}]);
+  it('clears the content on close', async () => {
+    await makeModal([{name: 'A', filePath: 'a.md'}]);
     modal.close();
     expect(modal.contentEl.childElementCount).toBe(0);
   });

@@ -2,7 +2,7 @@ import {ItemView, Notice, ViewStateResult, WorkspaceLeaf} from 'obsidian';
 import {HANZI_VIEW_TYPE} from '../main';
 
 import HanziPracticePlugin from '../main';
-import {bankSources} from '../settings';
+import {resolveBankSources} from '../settings';
 import {HistoryManager} from '../utils/history_manager';
 import {PinyinSelector} from '../components/pinyin_selector';
 import {FlashCard} from '../components/flash_card';
@@ -99,10 +99,14 @@ export class HanziPracticeView extends ItemView {
    * dictionary is NOT loaded here.
    */
   private async loadNext() {
+    const {sources} = await resolveBankSources(
+      this.plugin.app,
+      this.plugin.settings,
+    );
     const nextEntry = await HistoryManager.getNextDueEntry(
       this.plugin.app,
       this.plugin.settings.historyFilePath,
-      bankSources(this.plugin.settings),
+      sources,
       this.bank,
     );
     await this.renderPractice(nextEntry);
@@ -391,7 +395,8 @@ export class HanziPracticeView extends ItemView {
       ? await HistoryManager.getMixUpEntry(
           this.plugin.app,
           this.plugin.settings.historyFilePath,
-          bankSources(this.plugin.settings),
+          (await resolveBankSources(this.plugin.app, this.plugin.settings))
+            .sources,
           this.currentEntry,
         )
       : null;

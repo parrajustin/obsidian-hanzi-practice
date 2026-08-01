@@ -35,7 +35,8 @@ describe('EditBankModal', () => {
         historyFilePath: 'history.md',
         practiceFilePath: 'words.md',
         banks: [{name: 'Capitals', filePath: 'capitals.md'}],
-        version: 1,
+        dataPacks: [],
+        version: 2,
       },
     } as never;
     modal = new EditBankModal(app, plugin);

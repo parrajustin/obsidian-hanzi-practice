@@ -8,9 +8,26 @@ import * as fs from 'fs';
 import * as path from 'path';
 import {App, Plugin} from 'obsidian';
 import {noticeMessages, Plugin as MockPlugin} from './__mocks__/obsidian';
-import {HanziPluginSettings, HanziSettingTab} from '../src/settings';
+import {FileUtil} from 'standard-obsidian-lib/src/filesystem/file_util';
+import {Err, Ok} from 'standard-ts-lib/src/result';
+import {NotFoundError} from 'standard-ts-lib/src/status_error';
+import {TextEncoder, TextDecoder} from 'util';
+import {
+  HanziPluginSettings,
+  HanziSettingTab,
+  resolveBankSources,
+} from '../src/settings';
 import {parseDataPack} from '../src/utils/data_pack';
-import {CardType, parsePracticeList} from '../src/utils/practice_list';
+import {
+  CardType,
+  HANZI_BANK,
+  parsePracticeList,
+} from '../src/utils/practice_list';
+
+global.TextEncoder = TextEncoder;
+global.TextDecoder = TextDecoder as any;
+
+jest.mock('standard-obsidian-lib/src/filesystem/file_util');
 
 const EXAMPLES_DIR = path.join(__dirname, '..', 'examples', 'data-packs');
 
@@ -82,18 +99,21 @@ describe.each(EXAMPLE_PACKS)('example pack $file', ({file, banks}) => {
   });
 });
 
-describe('importing the example packs through the settings file picker', () => {
+describe('installing the example packs through the settings file picker', () => {
   let tab: HanziSettingTab;
   let settings: HanziPluginSettings;
   let saveSettings: jest.Mock;
 
   beforeEach(() => {
+    jest.clearAllMocks();
     noticeMessages.length = 0;
+    (FileUtil.writeToFile as jest.Mock).mockResolvedValue(Ok(undefined));
     settings = {
-      version: 1,
+      version: 2,
       historyFilePath: 'hanzi-practice-history.md',
       practiceFilePath: 'hanzi-practice-words.md',
       banks: [],
+      dataPacks: [],
     };
     saveSettings = jest.fn().mockResolvedValue(undefined);
     tab = new HanziSettingTab(
@@ -106,7 +126,7 @@ describe('importing the example packs through the settings file picker', () => {
   });
 
   it.each(EXAMPLE_PACKS)(
-    'picking $file installs its banks',
+    'picking $file copies it into the vault and registers it',
     async ({file, banks}) => {
       const packJson = readExample(file);
       const packFile = new File([packJson], file, {
@@ -127,12 +147,58 @@ describe('importing the example packs through the settings file picker', () => {
       await flush();
       await flush();
 
-      expect(settings.banks.map(b => b.name)).toEqual(
-        banks.map(([name]) => name),
+      // The pack is registered by path — its banks are NOT copied into the
+      // settings; they resolve from the vault JSON on every load.
+      expect(settings.dataPacks).toEqual([{filePath: file}]);
+      expect(settings.banks).toEqual([]);
+      expect(FileUtil.writeToFile).toHaveBeenCalledWith(
+        expect.anything(),
+        file,
+        new TextEncoder().encode(packJson),
+        expect.anything(),
       );
       expect(saveSettings).toHaveBeenCalledWith(settings);
-      expect(noticeMessages.at(-1)).toContain('Imported data pack');
-      expect(noticeMessages.at(-1)).toContain(`${banks.length} added`);
+      expect(noticeMessages.at(-1)).toContain('Installed data pack');
+      expect(noticeMessages.at(-1)).toContain(
+        `${banks.length} bank${banks.length === 1 ? '' : 's'}`,
+      );
+    },
+  );
+});
+
+describe('resolving banks from registered example packs', () => {
+  beforeEach(() => {
+    jest.clearAllMocks();
+    // Serve every vault read from the examples directory, so the registered
+    // pack JSON and its linked card files both resolve like a real vault.
+    (FileUtil.fetchFile as jest.Mock).mockImplementation(
+      (_app: unknown, filePath: string) => {
+        const full = path.join(EXAMPLES_DIR, filePath);
+        if (!fs.existsSync(full)) {
+          return Promise.resolve(Err(NotFoundError(`missing ${filePath}`)));
+        }
+        return Promise.resolve(
+          Ok(new TextEncoder().encode(fs.readFileSync(full, 'utf8'))),
+        );
+      },
+    );
+  });
+
+  it.each(EXAMPLE_PACKS)(
+    'a registered $file contributes its banks at resolution time',
+    async ({file, banks}) => {
+      const {sources, packErrors} = await resolveBankSources(new App(), {
+        version: 2,
+        historyFilePath: 'hanzi-practice-history.md',
+        practiceFilePath: 'hanzi-practice-words.md',
+        banks: [],
+        dataPacks: [{filePath: file}],
+      });
+      expect(packErrors).toEqual([]);
+      expect(sources.map(s => s.name)).toEqual([
+        HANZI_BANK,
+        ...banks.map(([name]) => name),
+      ]);
     },
   );
 });

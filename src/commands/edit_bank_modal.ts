@@ -1,6 +1,6 @@
 import {App, Modal, Notice, TFile} from 'obsidian';
 import HanziPracticePlugin from '../main';
-import {bankSources, HanziPluginSettings} from '../settings';
+import {resolveBankSources, HanziPluginSettings} from '../settings';
 import {prettifyPinyin} from '../utils/prettify_pinyin';
 import {
   BankSource,
@@ -62,7 +62,8 @@ export class EditBankModal extends Modal {
 
   private async loadEntries(): Promise<SourcedEntry[]> {
     const rows: SourcedEntry[] = [];
-    for (const source of bankSources(this.settings)) {
+    const {sources} = await resolveBankSources(this.app, this.settings);
+    for (const source of sources) {
       const text = await this.readSourceFile(source);
       if (text === null) continue;
       for (const entry of parsePracticeList(text)) {

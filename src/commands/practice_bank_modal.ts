@@ -1,6 +1,6 @@
 import {App, Modal} from 'obsidian';
 import HanziPracticePlugin from '../main';
-import {bankSources} from '../settings';
+import {resolveBankSources} from '../settings';
 import {HistoryManager} from '../utils/history_manager';
 
 /**
@@ -27,7 +27,7 @@ export class PracticeBankModal extends Modal {
   }
 
   private async renderBanks() {
-    const sources = bankSources(this.plugin.settings);
+    const {sources} = await resolveBankSources(this.app, this.plugin.settings);
     const entries = await HistoryManager.loadAllPracticeEntries(
       this.app,
       sources,
