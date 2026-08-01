@@ -1,5 +1,11 @@
 # obsidian-hanzi-practice
 
+## Data formats
+
+How cards are saved in markdown, how practice banks are loaded, and how to
+install bank sets with a data-pack JSON file: see
+[CARD_FORMATS.md](CARD_FORMATS.md).
+
 ## Releasing
 
 Releases are cut with [`release.sh`](release.sh) from the repo root on the

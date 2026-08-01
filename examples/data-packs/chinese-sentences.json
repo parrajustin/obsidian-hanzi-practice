@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "Chinese sentences (cloze / fill in the blank)",
+  "banks": [
+    {"name": "Sentences", "filePath": "packs/sentence-cards.md"}
+  ]
+}

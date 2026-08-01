@@ -1,7 +1,9 @@
 import {App, Notice, Plugin, PluginSettingTab, Setting} from 'obsidian';
 import {SchemaManager} from 'standard-obsidian-lib/src/schema/schema';
 import {Ok} from 'standard-ts-lib/src/result';
+import {WrapPromise} from 'standard-ts-lib/src/wrap_promise';
 import {z} from 'zod';
+import {mergeDataPackBanks, parseDataPack} from './utils/data_pack';
 import {BankSource, HANZI_BANK} from './utils/practice_list';
 import {HistoryManager} from './utils/history_manager';
 
@@ -110,6 +112,7 @@ export class HanziSettingTab extends PluginSettingTab {
       );
 
     this.displayBankSettings(containerEl);
+    this.displayDataPackSettings(containerEl);
   }
 
   /**
@@ -174,6 +177,79 @@ export class HanziSettingTab extends PluginSettingTab {
           this.display();
         });
       });
+  }
+
+  /**
+   * Data-pack import: an Import button driving a hidden file input. A data
+   * pack is a JSON file linking bank names to the markdown files holding
+   * their cards (see CARD_FORMATS.md), so a whole bank set installs in one
+   * click instead of row by row in the list above.
+   */
+  private displayDataPackSettings(containerEl: HTMLElement) {
+    new Setting(containerEl).setName('Data Packs').setHeading();
+
+    const fileInput = containerEl.createEl('input');
+    fileInput.type = 'file';
+    fileInput.accept = '.json,application/json';
+    fileInput.addClass('hanzi-pack-file-input');
+    fileInput.style.display = 'none';
+    fileInput.addEventListener('change', () => {
+      const file = fileInput.files?.[0];
+      // Reset so picking the same file again fires another change event.
+      fileInput.value = '';
+      if (!file) return;
+      void this.importDataPackFile(file);
+    });
+
+    new Setting(containerEl)
+      .setName('Import data pack')
+      .setDesc(
+        'Pick a data-pack .json file linking practice banks to their card ' +
+          'files; the banks are added to the list above.',
+      )
+      .addButton(btn => {
+        btn.buttonEl.addClass('hanzi-pack-import');
+        btn.setButtonText('Import').onClick(() => fileInput.click());
+      });
+  }
+
+  private async importDataPackFile(file: File): Promise<void> {
+    const text = await WrapPromise(
+      file.text(),
+      /*textForUnknown=*/ 'Failed to read data pack file',
+    );
+    if (!text.ok) {
+      new Notice(`Data pack import failed: ${text.val.message}`);
+      return;
+    }
+    await this.importDataPackText(text.val);
+  }
+
+  /**
+   * Merge the pack's banks into the settings by bank name (new names append
+   * a bank, known names re-point that bank's file path) and persist. The
+   * settings tab is the top-level caller, so errors surface here as Notices.
+   */
+  async importDataPackText(text: string): Promise<void> {
+    const pack = parseDataPack(text);
+    if (!pack.ok) {
+      new Notice(`Data pack import failed: ${pack.val.message}`);
+      return;
+    }
+    const merged = mergeDataPackBanks(this.settings.banks, pack.val);
+    this.settings.banks = merged.banks;
+    await this.saveSettings(this.settings);
+    const packName = pack.val.name ? ` "${pack.val.name}"` : '';
+    const parts = [
+      `${merged.added} added`,
+      `${merged.updated} updated`,
+      `${merged.unchanged} unchanged`,
+    ];
+    if (merged.skipped > 0) {
+      parts.push(`${merged.skipped} skipped (the Hanzi bank is built in)`);
+    }
+    new Notice(`Imported data pack${packName} — ${parts.join(', ')}`);
+    this.display();
   }
 
   /**

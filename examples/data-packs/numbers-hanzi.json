@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "Chinese numbers (hanzi cards)",
+  "banks": [
+    {"name": "Numbers", "filePath": "packs/numbers-hanzi-cards.md"}
+  ]
+}

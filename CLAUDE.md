@@ -203,6 +203,14 @@ hotkeys/history.
   drops the config, never the file) — plus an "Add Bank" button (`.hanzi-bank-add`) that
   appends a row. **`hide()` (settings closed) re-parses every bank file** and shows a Notice
   with per-bank card counts, so path edits take effect (and typos surface) immediately.
+  A **Data Packs** section imports a pack JSON (`Import` button `.hanzi-pack-import` driving a
+  hidden file input `.hanzi-pack-file-input`; web File API only — mobile-safe): the pack's
+  banks merge into `settings.banks` **by name** (add / re-point path / unchanged; the reserved
+  name `Hanzi` is skipped) via `src/utils/data_pack.ts` (`parseDataPack` = WrapToResult'd
+  JSON.parse + zod v1 schema `{version: 1, name?, banks: {name, filePath}[], rules?}` —
+  `rules` is reserved/ignored, unknown keys stripped; `mergeDataPackBanks` is pure/non-mutating).
+  User-facing format doc: `CARD_FORMATS.md` (card line format per type, bank loading, data
+  packs — keep it in sync with format changes).
 - Depends on sibling repos `../standard-obsidian-lib` and `../standard-ts-lib` (`file:` deps).
   `FileUtil.fetchFile(app, path, RAW)` reads via `app.vault.adapter.readBinary` (vault-root
   relative); `OBSIDIAN` type reads via the vault API.
@@ -311,14 +319,19 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
    `jest.config.js` are ignored. `npm run lint:fix` / `npm run format` to auto-fix — but beware:
    `eslint . --fix` on *unformatted* code once produced broken output from overlapping fixes;
    run `npm run format` (plain prettier) first, then `lint:fix`.
-3. `test:unit` — `npx jest`: 147 tests across 19 suites — the data layer
-   (`practice_list` / `history_manager` / `spaced_repetition` / `stroke_codec` (HZS2
+3. `test:unit` — `npx jest`: 202 tests across 22 suites — the data layer
+   (`practice_list` / `card_markdown_roundtrip` (per-card-type markdown save/load round-trips
+   pinning the CARD_FORMATS.md format) / `data_pack` (pack JSON parse + bank merge) /
+   `example_data_packs` (loads the shipped `examples/data-packs/*.json` + linked card files
+   from disk and imports each through the settings file picker — keeps the examples valid) /
+   `history_manager` / `spaced_repetition` / `stroke_codec` (HZS2
    round-trip incl. negative + astral-plane chars) / `stroke_matcher` (accepts median replay
    + jitter, rejects backwards/wrong/far strokes) / `cedict_parser` + the node-env loaders
    `stroke_data` + `cedict_load` (gzip magic, corrupt-gzip, fetch-error paths)), the DOM
    components (`components.test.ts`: FlashCard / MultiChoiceCard / ClozeCard /
    PinyinSelector), the modals (`add_flashcard_modal` incl. per-type validation,
-   `edit_bank_modal`, `practice_bank_modal`), the settings tab (`settings_tab`), and the
+   `edit_bank_modal`, `practice_bank_modal`), the settings tab (`settings_tab`, incl. the
+   data-pack import), and the
    practice view (`hanzi_view`: per-type dispatch, quiz grading incl. Give Up, mix-up).
    **Coverage is enforced**: `collectCoverageFrom` counts EVERY `src/**` file (except
    `main.ts` — plugin lifecycle glue covered by the E2E — and `writer/quiz_writer.ts` —

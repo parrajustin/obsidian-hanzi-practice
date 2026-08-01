@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "name": "Starter pack (every card type)",
+  "banks": [
+    {"name": "Numbers", "filePath": "packs/numbers-hanzi-cards.md"},
+    {"name": "Capitals", "filePath": "packs/capitals-cards.md"},
+    {"name": "German Vocab", "filePath": "packs/german-vocab-cards.md"},
+    {"name": "Grammar Quiz", "filePath": "packs/grammar-quiz-cards.md"},
+    {"name": "Sentences", "filePath": "packs/sentence-cards.md"}
+  ]
+}

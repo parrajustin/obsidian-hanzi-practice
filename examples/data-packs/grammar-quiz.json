@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "Chinese grammar (multiple choice)",
+  "banks": [
+    {"name": "Grammar Quiz", "filePath": "packs/grammar-quiz-cards.md"}
+  ]
+}

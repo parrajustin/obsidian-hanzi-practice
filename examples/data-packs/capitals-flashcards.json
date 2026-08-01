@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "World capitals (flashcards)",
+  "banks": [
+    {"name": "Capitals", "filePath": "packs/capitals-cards.md"}
+  ]
+}

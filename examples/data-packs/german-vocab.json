@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "German vocabulary (reversible flashcards)",
+  "banks": [
+    {"name": "German Vocab", "filePath": "packs/german-vocab-cards.md"}
+  ]
+}

@@ -82,6 +82,76 @@ describe('HanziSettingTab', () => {
     ).toHaveLength(0);
   });
 
+  it('the Import button opens the hidden data-pack file picker', () => {
+    const fileInput = input('.hanzi-pack-file-input');
+    const click = jest.spyOn(fileInput, 'click').mockImplementation(() => {});
+    (
+      tab.containerEl.querySelector('.hanzi-pack-import') as HTMLElement
+    ).dispatchEvent(new MouseEvent('click'));
+    expect(click).toHaveBeenCalled();
+  });
+
+  it('importing a data pack merges its banks, saves, and re-renders', async () => {
+    settings.banks.push({name: 'Capitals', filePath: 'old.md'});
+    tab.display();
+    await tab.importDataPackText(
+      JSON.stringify({
+        version: 1,
+        name: 'Starter',
+        banks: [
+          {name: 'Capitals', filePath: 'packs/capitals-cards.md'},
+          {name: 'German', filePath: 'packs/german-cards.md'},
+        ],
+      }),
+    );
+    expect(settings.banks).toEqual([
+      {name: 'Capitals', filePath: 'packs/capitals-cards.md'},
+      {name: 'German', filePath: 'packs/german-cards.md'},
+    ]);
+    expect(saveSettings).toHaveBeenCalledWith(settings);
+    expect(noticeMessages.at(-1)).toContain('Imported data pack "Starter"');
+    expect(noticeMessages.at(-1)).toContain('1 added');
+    expect(noticeMessages.at(-1)).toContain('1 updated');
+    // The bank list re-rendered with the imported rows.
+    expect(
+      tab.containerEl.querySelectorAll('.hanzi-bank-row-setting'),
+    ).toHaveLength(2);
+  });
+
+  it('an invalid data pack leaves the settings untouched', async () => {
+    await tab.importDataPackText('{"version": 999}');
+    expect(settings.banks).toEqual([]);
+    expect(saveSettings).not.toHaveBeenCalled();
+    expect(noticeMessages.at(-1)).toContain('Data pack import failed');
+  });
+
+  it('picking a pack file imports it through the change handler', async () => {
+    const fileInput = input('.hanzi-pack-file-input');
+    const packJson = JSON.stringify({
+      version: 1,
+      banks: [{name: 'German', filePath: 'german-cards.md'}],
+    });
+    const file = new File([packJson], 'pack.json', {
+      type: 'application/json',
+    });
+    // jsdom 20 lacks the web-standard Blob.text() the tab reads with.
+    Object.defineProperty(file, 'text', {
+      value: () => Promise.resolve(packJson),
+    });
+    Object.defineProperty(fileInput, 'files', {
+      value: [file],
+      configurable: true,
+    });
+    fileInput.dispatchEvent(new Event('change'));
+    // file.text() resolves over several microtasks; flush a macrotask twice.
+    await flush();
+    await flush();
+    expect(settings.banks).toEqual([
+      {name: 'German', filePath: 'german-cards.md'},
+    ]);
+    expect(noticeMessages.at(-1)).toContain('1 added');
+  });
+
   it('hide() re-parses every bank file and notices the counts', async () => {
     settings.banks.push({name: 'Capitals', filePath: 'capitals.md'});
     const load = jest
