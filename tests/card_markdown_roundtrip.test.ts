@@ -16,6 +16,7 @@ import {
   computeEntryId,
   computeFlashcardId,
   computeMultiChoiceId,
+  computeTrueFalseId,
   FlashcardEntry,
   formatPracticeEntry,
   HANZI_BANK,
@@ -23,6 +24,7 @@ import {
   MultiChoiceEntry,
   parsePracticeList,
   PracticeEntry,
+  TrueFalseEntry,
 } from '../src/utils/practice_list';
 import {HistoryManager} from '../src/utils/history_manager';
 
@@ -74,12 +76,22 @@ const CLOZE: ClozeEntry = {
   hint: "I haven't eaten for a week.",
 };
 
+const TRUE_FALSE: TrueFalseEntry = {
+  id: computeTrueFalseId('Grammar', '你有没有一只狗吗？'),
+  cardType: CardType.TRUE_FALSE,
+  bank: 'Grammar',
+  statement: '你有没有一只狗吗？',
+  isCorrect: false,
+  explanation: '有没有 already forms the question — drop the 吗.',
+};
+
 const ALL_ENTRIES: PracticeEntry[] = [
   HANZI,
   FLASHCARD,
   REVERSIBLE,
   MULTI_CHOICE,
   CLOZE,
+  TRUE_FALSE,
 ];
 
 /** Serialize entries the way the plugin writes a bank file. */
@@ -121,6 +133,12 @@ describe('per-card-type markdown lines (the documented format)', () => {
   it('saves a cloze card as text⇥hint⇥⇥id⇥4⇥bank', () => {
     expect(formatPracticeEntry(CLOZE)).toBe(
       `我一个星期{{没}}吃饭。\tI haven't eaten for a week.\t\t${CLOZE.id}\t4\tGerman`,
+    );
+  });
+
+  it('saves a true/false card as statement⇥true|false⇥explanation⇥id⇥5⇥bank', () => {
+    expect(formatPracticeEntry(TRUE_FALSE)).toBe(
+      `你有没有一只狗吗？\tfalse\t有没有 already forms the question — drop the 吗.\t${TRUE_FALSE.id}\t5\tGrammar`,
     );
   });
 

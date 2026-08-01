@@ -114,6 +114,66 @@ describe('MultiChoiceCard', () => {
     click(option('有没有'));
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
+
+  it('renders no prompt or explanation elements by default', () => {
+    render(jest.fn());
+    expect(container.querySelector('.mc-prompt')).toBeNull();
+    expect(container.querySelector('.mc-explanation')).toBeNull();
+  });
+
+  // The true/false card type reuses this component: the statement is the
+  // question, Correct/Incorrect are the two options, and the optional
+  // prompt/explanation extras carry the "Is this correct?" framing.
+  it('shows the prompt line and reveals the explanation on completion', () => {
+    const onComplete = jest.fn();
+    new MultiChoiceCard(
+      container,
+      '你有没有一只狗吗？',
+      'Incorrect',
+      ['Correct'],
+      onComplete,
+      {
+        prompt: 'Is this correct?',
+        explanation: '有没有 already forms the question — drop the 吗.',
+      },
+    ).render();
+
+    expect(container.querySelector('.mc-prompt')?.textContent).toBe(
+      'Is this correct?',
+    );
+    const explanation = container.querySelector(
+      '.mc-explanation',
+    ) as HTMLElement;
+    expect(explanation.style.display).toBe('none');
+
+    click(option('Incorrect'));
+    expect(onComplete).toHaveBeenCalledWith(0);
+    expect(explanation.style.display).toBe('block');
+    expect(explanation.textContent).toBe(
+      '有没有 already forms the question — drop the 吗.',
+    );
+  });
+
+  it('keeps the explanation hidden across wrong picks until completion', () => {
+    const onComplete = jest.fn();
+    new MultiChoiceCard(
+      container,
+      '你有没有一只狗吗？',
+      'Incorrect',
+      ['Correct'],
+      onComplete,
+      {explanation: 'why'},
+    ).render();
+    const explanation = container.querySelector(
+      '.mc-explanation',
+    ) as HTMLElement;
+
+    click(option('Correct')); // wrong — the statement is incorrect
+    expect(explanation.style.display).toBe('none');
+    click(option('Incorrect'));
+    expect(onComplete).toHaveBeenCalledWith(1);
+    expect(explanation.style.display).toBe('block');
+  });
 });
 
 describe('ClozeCard', () => {

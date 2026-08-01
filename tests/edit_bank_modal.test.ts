@@ -9,6 +9,8 @@ const HANZI_LINE = '好\thao3\tgood\taaaaaaaa\t0\tHanzi';
 const FLASH_LINE = 'France\tParis\t\tbbbbbbbb\t1\tCapitals';
 const MC_LINE = '你__狗吗？\t有没有\t不有|没不有\tcccccccc\t3\tCapitals';
 const CLOZE_LINE = '四{{个}}月\tfour months\t\tdddddddd\t4\tCapitals';
+const TF_LINE =
+  '你有没有一只狗吗？\tfalse\t有没有 already asks — drop 吗\teeeeeeee\t5\tCapitals';
 
 describe('EditBankModal', () => {
   let app: App;
@@ -45,14 +47,14 @@ describe('EditBankModal', () => {
     noticeMessages.length = 0;
     files = {
       'words.md': HANZI_LINE,
-      'capitals.md': [FLASH_LINE, MC_LINE, CLOZE_LINE].join('\n'),
+      'capitals.md': [FLASH_LINE, MC_LINE, CLOZE_LINE, TF_LINE].join('\n'),
     };
   });
 
   it('lists every card type with its own row layout, grouped by bank', async () => {
     await openModal();
     const rows = modal.contentEl.querySelectorAll('.hanzi-bank-row');
-    expect(rows).toHaveLength(4);
+    expect(rows).toHaveLength(5);
     // Two banks → headings render.
     const headings = Array.from(
       modal.contentEl.querySelectorAll('.practice-bank-heading'),
@@ -82,6 +84,14 @@ describe('EditBankModal', () => {
     expect(modal.contentEl.querySelector('.cloze-bank-hint')?.textContent).toBe(
       'four months',
     );
+    expect(
+      modal.contentEl.querySelector('.tf-bank-statement')?.textContent,
+    ).toBe('你有没有一只狗吗？');
+    const tfAnswer = modal.contentEl.querySelector(
+      '.tf-bank-answer',
+    ) as HTMLElement;
+    expect(tfAnswer.textContent).toBe('incorrect');
+    expect(tfAnswer.title).toContain('有没有 already asks — drop 吗');
   });
 
   it('shows the empty message when no bank has cards', async () => {
@@ -92,7 +102,7 @@ describe('EditBankModal', () => {
 
   it('removing a card rewrites only its own bank file', async () => {
     await openModal();
-    // Row order: hanzi, flashcard, mc, cloze — remove the MC card.
+    // Row order: hanzi, flashcard, mc, cloze, true/false — remove the MC card.
     const removeButtons =
       modal.contentEl.querySelectorAll('.hanzi-bank-remove');
     // Keep the in-memory read stable while removeEntry re-reads capitals.md.
@@ -103,7 +113,10 @@ describe('EditBankModal', () => {
     const written = (app.vault.modify as jest.Mock).mock.calls[0][1] as string;
     expect(written).toContain('France');
     expect(written).toContain('四{{个}}月');
-    expect(written).not.toContain('有没有');
+    expect(written).toContain('你有没有一只狗吗？');
+    // The removed MC card's own line is gone (its answer 有没有 survives only
+    // inside the true/false statement text).
+    expect(written).not.toContain('\t有没有\t');
     expect(noticeMessages.some(m => m.includes('Removed'))).toBe(true);
   });
 });

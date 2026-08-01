@@ -11,6 +11,7 @@ import {
   IsFlashcardEntry,
   IsHanziEntry,
   IsMultiChoiceEntry,
+  IsTrueFalseEntry,
   parsePracticeList,
   PracticeEntry,
 } from '../utils/practice_list';
@@ -158,6 +159,32 @@ export class EditBankModal extends Modal {
       hintEl.style.whiteSpace = 'nowrap';
       hintEl.style.color = 'var(--text-muted)';
       hintEl.title = entry.hint;
+    } else if (IsTrueFalseEntry(entry)) {
+      const statementEl = row.createEl('span', {
+        cls: 'tf-bank-statement',
+        text: entry.statement,
+      });
+      statementEl.style.flex = '1';
+      statementEl.style.overflow = 'hidden';
+      statementEl.style.textOverflow = 'ellipsis';
+      statementEl.style.whiteSpace = 'nowrap';
+      statementEl.title = entry.statement;
+
+      const answerEl = row.createEl('span', {
+        cls: 'tf-bank-answer',
+        text: entry.isCorrect ? 'correct' : 'incorrect',
+      });
+      answerEl.style.flex = '1';
+      answerEl.style.overflow = 'hidden';
+      answerEl.style.textOverflow = 'ellipsis';
+      answerEl.style.whiteSpace = 'nowrap';
+      answerEl.style.color = 'var(--text-muted)';
+      // The tooltip carries the why, like the MC tooltip carries distractors.
+      answerEl.title = entry.explanation
+        ? `${entry.isCorrect ? 'correct' : 'incorrect'} · ${entry.explanation}`
+        : entry.isCorrect
+          ? 'correct'
+          : 'incorrect';
     } else if (IsFlashcardEntry(entry)) {
       const frontEl = row.createEl('span', {
         cls: 'flash-bank-front',

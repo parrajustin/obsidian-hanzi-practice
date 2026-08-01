@@ -6,6 +6,7 @@
     {"name": "Capitals", "filePath": "packs/capitals-cards.md"},
     {"name": "German Vocab", "filePath": "packs/german-vocab-cards.md"},
     {"name": "Grammar Quiz", "filePath": "packs/grammar-quiz-cards.md"},
-    {"name": "Sentences", "filePath": "packs/sentence-cards.md"}
+    {"name": "Sentences", "filePath": "packs/sentence-cards.md"},
+    {"name": "Correct or Not", "filePath": "packs/true-false-cards.md"}
   ]
 }

@@ -6,6 +6,7 @@ import {
   computeClozeId,
   computeFlashcardId,
   computeMultiChoiceId,
+  computeTrueFalseId,
   formatPracticeEntry,
   parseClozeSegments,
   parsePracticeList,
@@ -26,6 +27,8 @@ import {
  *   - Fill in the blank: a sentence with each answer wrapped in `{{…}}`,
  *     plus an optional hint; at least one `{{…}}` blank is required so a
  *     blankless card can't be authored by accident.
+ *   - True / false: a statement, a "the statement is correct" toggle, and an
+ *     optional explanation shown after answering.
  *
  * The modal stays open after a successful add so a batch of cards can be
  * entered in one sitting (text fields clear; bank + type + toggle stick).
@@ -41,6 +44,9 @@ export class AddFlashcardModal extends Modal {
   private distractorsText = '';
   private clozeText = '';
   private clozeHint = '';
+  private tfStatement = '';
+  private tfIsCorrect = false;
+  private tfExplanation = '';
   private plugin: HanziPracticePlugin;
   private settings: HanziPluginSettings;
   private errorEl!: HTMLElement;
@@ -89,6 +95,7 @@ export class AddFlashcardModal extends Modal {
         dropdown.addOption(String(CardType.FLASHCARD), 'Flashcard');
         dropdown.addOption(String(CardType.MULTIPLE_CHOICE), 'Multiple choice');
         dropdown.addOption(String(CardType.CLOZE), 'Fill in the blank');
+        dropdown.addOption(String(CardType.TRUE_FALSE), 'True / false');
         dropdown.setValue(String(CardType.FLASHCARD)).onChange(value => {
           this.cardType = parseInt(value, 10) as CardType;
           this.clearError();
@@ -172,6 +179,31 @@ export class AddFlashcardModal extends Modal {
         'Optional hint or translation shown with the blanked sentence.',
         "e.g. I haven't eaten for a week.",
         v => (this.clozeHint = v),
+      );
+      return;
+    }
+
+    if (this.cardType === CardType.TRUE_FALSE) {
+      addTextArea(
+        'Statement',
+        'The statement to judge — it may be right or wrong.',
+        'e.g. 你有没有一只狗吗？',
+        v => (this.tfStatement = v),
+      );
+      new Setting(this.fieldsEl)
+        .setName('The statement is correct')
+        .setDesc('Leave off when the statement is wrong on purpose.')
+        .addToggle(toggle => {
+          toggle.toggleEl.addClass('tf-correct-toggle');
+          toggle.setValue(this.tfIsCorrect).onChange(value => {
+            this.tfIsCorrect = value;
+          });
+        });
+      addTextArea(
+        'Explanation',
+        'Optional: why the statement is right or wrong, shown after answering.',
+        'e.g. 有没有 already forms the question — drop the 吗.',
+        v => (this.tfExplanation = v),
       );
       return;
     }
@@ -263,6 +295,23 @@ export class AddFlashcardModal extends Modal {
       };
     }
 
+    if (this.cardType === CardType.TRUE_FALSE) {
+      const statement = sanitizeField(this.tfStatement);
+      const explanation = sanitizeField(this.tfExplanation);
+      if (!statement) {
+        this.showError('The statement is required.');
+        return null;
+      }
+      return {
+        id: computeTrueFalseId(bankName, statement),
+        cardType: CardType.TRUE_FALSE,
+        bank: bankName,
+        statement,
+        isCorrect: this.tfIsCorrect,
+        explanation,
+      };
+    }
+
     const front = sanitizeField(this.front);
     const back = sanitizeField(this.back);
     if (!front || !back) {
@@ -325,6 +374,8 @@ export class AddFlashcardModal extends Modal {
     this.distractorsText = '';
     this.clozeText = '';
     this.clozeHint = '';
+    this.tfStatement = '';
+    this.tfExplanation = '';
     for (const input of this.textInputs) {
       input.value = '';
     }

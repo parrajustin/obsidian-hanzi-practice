@@ -11,7 +11,8 @@ The pack format and the card line format are documented in
 | `german-vocab.json` | German Vocab | 2 — reversible flashcard |
 | `grammar-quiz.json` | Grammar Quiz | 3 — multiple choice |
 | `chinese-sentences.json` | Sentences | 4 — cloze / fill in the blank |
-| `starter-all-types.json` | all five above | every type |
+| `true-false-grammar.json` | Correct or Not | 5 — is this correct? (true/false) |
+| `starter-all-types.json` | all six above | every type |
 
 The card files live in [`packs/`](packs/) and leave the id field empty — ids
 are derived on first load, so hand-authored packs never need to compute them.

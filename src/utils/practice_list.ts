@@ -18,6 +18,8 @@
  *     `|` (option text is sanitized so it can never contain `|`).
  *   - Cloze / fill-in-the-blank (4): sentence with each answer wrapped in
  *     `{{…}}`, optional hint/translation, (unused).
+ *   - True/false (5): the statement being judged, `true`/`false` (whether the
+ *     statement is actually correct), optional explanation of why.
  *
  * Older hanzi lines are still parsed: 4-field lines (no cardType/bank),
  * 3-field lines (no id — derived), and plain single-character lines (the
@@ -41,6 +43,8 @@ export enum CardType {
   MULTIPLE_CHOICE = 3,
   /** Sentence with {{blanked}} words: recall, reveal, self-grade. */
   CLOZE = 4,
+  /** "Is this correct?": judge a statement true/false; auto-graded. */
+  TRUE_FALSE = 5,
 }
 
 /** The bank every hanzi card belongs to. */
@@ -95,8 +99,18 @@ export interface ClozeEntry extends BaseEntry {
   hint: string;
 }
 
+export interface TrueFalseEntry extends BaseEntry {
+  cardType: CardType.TRUE_FALSE;
+  /** The statement being judged, e.g. a possibly-ungrammatical sentence. */
+  statement: string;
+  /** Whether the statement is actually correct. */
+  isCorrect: boolean;
+  /** Optional explanation of why, shown after answering. */
+  explanation: string;
+}
+
 export type PracticeEntry =
-  HanziEntry | FlashcardEntry | MultiChoiceEntry | ClozeEntry;
+  HanziEntry | FlashcardEntry | MultiChoiceEntry | ClozeEntry | TrueFalseEntry;
 
 /**
  * Type guard for the two flashcard variants. Written so that entries with a
@@ -116,7 +130,8 @@ export function IsHanziEntry(entry: PracticeEntry): entry is HanziEntry {
   return (
     !IsFlashcardEntry(entry) &&
     entry.cardType !== CardType.MULTIPLE_CHOICE &&
-    entry.cardType !== CardType.CLOZE
+    entry.cardType !== CardType.CLOZE &&
+    entry.cardType !== CardType.TRUE_FALSE
   );
 }
 
@@ -128,6 +143,12 @@ export function IsMultiChoiceEntry(
 
 export function IsClozeEntry(entry: PracticeEntry): entry is ClozeEntry {
   return entry.cardType === CardType.CLOZE;
+}
+
+export function IsTrueFalseEntry(
+  entry: PracticeEntry,
+): entry is TrueFalseEntry {
+  return entry.cardType === CardType.TRUE_FALSE;
 }
 
 const FIELD_SEP = '\t';
@@ -178,6 +199,15 @@ export function computeMultiChoiceId(
 /** Stable id for a cloze card: the blanked sentence IS the card. */
 export function computeClozeId(bank: string, text: string): string {
   return computeCardId([bank, text]);
+}
+
+/**
+ * Stable id for a true/false card: the statement IS the card — the truth
+ * value and explanation may be edited freely (e.g. fixing a mislabeled card)
+ * without resetting its history.
+ */
+export function computeTrueFalseId(bank: string, statement: string): string {
+  return computeCardId([bank, statement]);
 }
 
 /**
@@ -248,7 +278,8 @@ export function parsePracticeList(text: string): PracticeEntry[] {
       cardTypeRaw === CardType.FLASHCARD ||
       cardTypeRaw === CardType.REVERSIBLE_FLASHCARD ||
       cardTypeRaw === CardType.MULTIPLE_CHOICE ||
-      cardTypeRaw === CardType.CLOZE
+      cardTypeRaw === CardType.CLOZE ||
+      cardTypeRaw === CardType.TRUE_FALSE
         ? cardTypeRaw
         : CardType.HANZI;
     const bank = (parts[5] ?? '').trim() || HANZI_BANK;
@@ -271,6 +302,17 @@ export function parsePracticeList(text: string): PracticeEntry[] {
         bank,
         text: f0,
         hint: f1,
+      });
+    } else if (cardType === CardType.TRUE_FALSE) {
+      entries.push({
+        id: id || computeTrueFalseId(bank, f0),
+        cardType,
+        bank,
+        statement: f0,
+        // Anything but the literal "true" (a hand-edit typo, say) reads as
+        // false — the safer direction for an "is this correct?" card.
+        isCorrect: f1.toLowerCase() === 'true',
+        explanation: f2,
       });
     } else if (cardType === CardType.HANZI) {
       entries.push({
@@ -329,6 +371,20 @@ export function formatPracticeEntry(entry: PracticeEntry): string {
     const id = entry.id || computeClozeId(bank, text);
     return [text, hint, '', id, String(entry.cardType), bank].join(FIELD_SEP);
   }
+  if (IsTrueFalseEntry(entry)) {
+    const statement = sanitizeField(entry.statement);
+    const explanation = sanitizeField(entry.explanation);
+    const bank = sanitizeField(entry.bank);
+    const id = entry.id || computeTrueFalseId(bank, statement);
+    return [
+      statement,
+      String(entry.isCorrect),
+      explanation,
+      id,
+      String(entry.cardType),
+      bank,
+    ].join(FIELD_SEP);
+  }
   const id = entry.id || computeEntryId(entry.character, entry.pinyin);
   return [
     entry.character,
@@ -354,6 +410,11 @@ export function entryLabel(entry: PracticeEntry): string {
     return `${truncate(sanitizeField(entry.question))} (${truncate(
       sanitizeOption(entry.answer),
     )})`;
+  }
+  if (IsTrueFalseEntry(entry)) {
+    return `${truncate(sanitizeField(entry.statement))} (${
+      entry.isCorrect ? 'correct' : 'incorrect'
+    })`;
   }
   if (IsClozeEntry(entry)) {
     // {{答案}} → [答案]: readable in history without the marker noise.

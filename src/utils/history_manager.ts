@@ -14,6 +14,7 @@ import {
   IsFlashcardEntry,
   IsHanziEntry,
   IsMultiChoiceEntry,
+  IsTrueFalseEntry,
   PracticeEntry,
   parsePracticeList,
 } from './practice_list';
@@ -46,6 +47,9 @@ function isPracticable(entry: PracticeEntry): boolean {
   }
   if (IsClozeEntry(entry)) {
     return entry.text.length > 0;
+  }
+  if (IsTrueFalseEntry(entry)) {
+    return entry.statement.length > 0;
   }
   // The drawing quiz models exactly one hanzi at a time.
   return entry.character.length === 1;

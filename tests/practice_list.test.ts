@@ -4,6 +4,7 @@ import {
   computeEntryId,
   computeFlashcardId,
   computeMultiChoiceId,
+  computeTrueFalseId,
   entryLabel,
   formatPracticeEntry,
   HANZI_BANK,
@@ -39,6 +40,14 @@ describe('computeFlashcardId', () => {
     const b = computeFlashcardId('Europe', 'France', 'Paris');
     expect(a).toMatch(/^[0-9a-f]{8}$/);
     expect(a).not.toBe(b);
+  });
+});
+
+describe('computeTrueFalseId', () => {
+  it('hashes bank + statement only, so the verdict can be fixed freely', () => {
+    const a = computeTrueFalseId('Grammar', '你有没有一只狗吗？');
+    expect(a).toMatch(/^[0-9a-f]{8}$/);
+    expect(computeTrueFalseId('Other', '你有没有一只狗吗？')).not.toBe(a);
   });
 });
 
@@ -126,6 +135,32 @@ describe('parsePracticeList', () => {
       cardType: CardType.MULTIPLE_CHOICE,
       distractors: [],
     });
+  });
+
+  it('parses true/false lines with statement, verdict and explanation', () => {
+    const entries = parsePracticeList(
+      '你有没有一只狗吗？\tfalse\t有没有 already forms the question.\tdeadbeef\t5\tGrammar',
+    );
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toEqual({
+      id: 'deadbeef',
+      cardType: CardType.TRUE_FALSE,
+      bank: 'Grammar',
+      statement: '你有没有一只狗吗？',
+      isCorrect: false,
+      explanation: '有没有 already forms the question.',
+    });
+  });
+
+  it('reads only the literal "true" as a correct statement', () => {
+    const parse = (verdict: string) =>
+      parsePracticeList(`statement\t${verdict}\t\tdeadbeef\t5\tGrammar`)[0];
+    expect(parse('true')).toMatchObject({isCorrect: true});
+    expect(parse('TRUE')).toMatchObject({isCorrect: true});
+    expect(parse('false')).toMatchObject({isCorrect: false});
+    // A hand-edit typo reads as false, never as a silent "correct".
+    expect(parse('yes')).toMatchObject({isCorrect: false});
+    expect(parse('')).toMatchObject({isCorrect: false});
   });
 
   it('parses cloze lines with text and hint', () => {
@@ -242,6 +277,27 @@ describe('formatPracticeEntry', () => {
     expect(formatPracticeEntry(entry)).toBe(line);
   });
 
+  it('round-trips true/false cards through parse', () => {
+    const line = formatPracticeEntry({
+      id: '',
+      cardType: CardType.TRUE_FALSE,
+      bank: 'Grammar',
+      statement: '你有没有一只狗吗？',
+      isCorrect: false,
+      explanation: '有没有 already forms the question — drop the 吗.',
+    });
+    const [entry] = parsePracticeList(line);
+    expect(entry).toEqual({
+      id: computeTrueFalseId('Grammar', '你有没有一只狗吗？'),
+      cardType: CardType.TRUE_FALSE,
+      bank: 'Grammar',
+      statement: '你有没有一只狗吗？',
+      isCorrect: false,
+      explanation: '有没有 already forms the question — drop the 吗.',
+    });
+    expect(formatPracticeEntry(entry)).toBe(line);
+  });
+
   it('collapses tabs and newlines in flashcard text (line format survives)', () => {
     const line = formatPracticeEntry({
       id: '',
@@ -309,6 +365,29 @@ describe('entryLabel', () => {
         distractors: ['不有'],
       }),
     ).toBe('你__狗吗？ (有没有)');
+  });
+
+  it('labels true/false cards as statement (verdict)', () => {
+    expect(
+      entryLabel({
+        id: 'deadbeef',
+        cardType: CardType.TRUE_FALSE,
+        bank: 'Grammar',
+        statement: '你有没有一只狗吗？',
+        isCorrect: false,
+        explanation: 'whatever',
+      }),
+    ).toBe('你有没有一只狗吗？ (incorrect)');
+    expect(
+      entryLabel({
+        id: 'deadbeef',
+        cardType: CardType.TRUE_FALSE,
+        bank: 'Grammar',
+        statement: '你有一只狗吗？',
+        isCorrect: true,
+        explanation: '',
+      }),
+    ).toBe('你有一只狗吗？ (correct)');
   });
 
   it('labels cloze cards with the blanks in brackets plus the hint', () => {

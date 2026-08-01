@@ -30,6 +30,15 @@ describe('PracticeBankModal', () => {
       front: 'x',
       back: 'y',
     },
+    // True/false cards count like any other card type.
+    {
+      id: 'ffffffff',
+      cardType: CardType.TRUE_FALSE,
+      bank: 'Capitals',
+      statement: '你有没有一只狗吗？',
+      isCorrect: false,
+      explanation: '',
+    },
   ];
 
   let modal: PracticeBankModal;
@@ -65,8 +74,9 @@ describe('PracticeBankModal', () => {
     const counts = Array.from(
       modal.contentEl.querySelectorAll('.practice-bank-count'),
     ).map(el => el.textContent);
-    // German is configured but empty; singular/plural handled.
-    expect(counts).toEqual(['1 card', '1 card', '0 cards', '1 card']);
+    // German is configured but empty; singular/plural handled. Capitals
+    // holds a flashcard + a true/false card.
+    expect(counts).toEqual(['1 card', '2 cards', '0 cards', '1 card']);
   });
 
   it('clicking a bank closes the modal and opens the practice view on it', () => {

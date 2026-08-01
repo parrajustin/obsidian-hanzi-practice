@@ -38,6 +38,14 @@ const CLOZE: PracticeEntry = {
   text: '四{{个}}月',
   hint: 'four months',
 };
+const TRUE_FALSE: PracticeEntry = {
+  id: 'ffffffff',
+  cardType: CardType.TRUE_FALSE,
+  bank: 'Grammar',
+  statement: '你有没有一只狗吗？',
+  isCorrect: false,
+  explanation: '有没有 already forms the question — drop the 吗.',
+};
 const HANZI: PracticeEntry = {
   id: 'dddddddd',
   cardType: CardType.HANZI,
@@ -178,6 +186,58 @@ describe('HanziPracticeView', () => {
       CLOZE,
       3,
     );
+  });
+
+  describe('true/false cards', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    const option = (text: string) =>
+      Array.from(content().querySelectorAll('.mc-option')).find(
+        b => b.textContent === text,
+      ) as HTMLElement;
+
+    it('renders via the multi-choice UI and grades a right pick 5', async () => {
+      await openWith(TRUE_FALSE, 'Grammar');
+      expect(content().querySelector('.mc-prompt')?.textContent).toBe(
+        'Is this correct?',
+      );
+      expect(content().querySelector('.mc-question')?.textContent).toBe(
+        '你有没有一只狗吗？',
+      );
+
+      // The statement is wrong, so "Incorrect" is the right pick.
+      option('Incorrect').dispatchEvent(new MouseEvent('click'));
+      await jest.advanceTimersByTimeAsync(0);
+      expect(appendResult).toHaveBeenCalledWith(
+        expect.anything(),
+        'history.md',
+        TRUE_FALSE,
+        5,
+      );
+
+      // The explanation is revealed and the advance waits so it can be read.
+      expect(
+        (content().querySelector('.mc-explanation') as HTMLElement).style
+          .display,
+      ).toBe('block');
+      expect(nextDue).toHaveBeenCalledTimes(1); // onOpen only — no advance yet
+      await jest.advanceTimersByTimeAsync(2500);
+      expect(nextDue).toHaveBeenCalledTimes(2); // advanced after the pause
+    });
+
+    it('grades any wrong pick 0 (two options leave no partial credit)', async () => {
+      await openWith(TRUE_FALSE, 'Grammar');
+      option('Correct').dispatchEvent(new MouseEvent('click')); // wrong
+      option('Incorrect').dispatchEvent(new MouseEvent('click'));
+      await jest.advanceTimersByTimeAsync(0);
+      expect(appendResult).toHaveBeenCalledWith(
+        expect.anything(),
+        'history.md',
+        TRUE_FALSE,
+        0,
+      );
+    });
   });
 
   it('shows the empty-bank message for a non-Hanzi bank with no cards', async () => {

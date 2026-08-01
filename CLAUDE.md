@@ -20,6 +20,14 @@ practice item is a **card** with a **card type** (how it is practiced) belonging
   (`src/components/cloze_card.ts`); the prompt blanks them out (plus optional hint),
   reveal shows the full sentence, then self-grade exactly like a flashcard (typed answers
   would fight the IME, especially on mobile).
+- **5 = true/false ("is this correct?")**: a statement (possibly deliberately wrong, e.g.
+  `你有没有一只狗吗？` — 有没有 already forms the question), whether it is actually correct,
+  and an optional explanation. **No dedicated component** — renders through
+  `MultiChoiceCard` with `Correct`/`Incorrect` as the two options plus its optional
+  `prompt` ("Is this correct?" line, `.mc-prompt`) and `explanation` (`.mc-explanation`,
+  revealed on completion) extras. Auto-graded with no partial credit (two options: a wrong
+  pick reveals the answer): right first pick → 5, otherwise → 0; the view then waits 2.5s
+  (via `advanceTimers`) before advancing so the reveal + explanation stay readable.
 
 All types feed the same SuperMemo-2-style spaced-repetition engine and track history in plain
 markdown files inside the vault. Ids (view type `hanzi-practice-view`, command ids, entry-id
@@ -118,7 +126,9 @@ hotkeys/history.
 - `src/commands/edit_bank_modal.ts` — `edit-hanzi-bank` command's modal: lists every practice
   entry (`.hanzi-bank-row`: char/pretty pinyin/English for hanzi, `.flash-bank-front`/`-back`
   for flashcards, `.mc-bank-question`/`-answer` for multiple choice — the answer's tooltip
-  also lists the distractors — and `.cloze-bank-text`/`-hint` for cloze) with a
+  also lists the distractors — `.cloze-bank-text`/`-hint` for cloze, and
+  `.tf-bank-statement`/`-answer` ("correct"/"incorrect"; tooltip carries the explanation)
+  for true/false) with a
   `.hanzi-bank-remove` button, grouped under `.practice-bank-heading`
   headers **only when more than one bank exists** (a hanzi-only vault renders the same DOM as
   before — the E2E depends on it). Removal filters by entry id and rewrites the words file via
@@ -127,12 +137,14 @@ hotkeys/history.
 - `src/commands/add_flashcard_modal.ts` — `add-flash-card` command's "Add Card" modal: bank
   **dropdown** (`.flash-bank-dropdown`, listing the banks configured in settings; a
   no-banks message points to Settings when empty) + **card-type dropdown**
-  (`.flash-type-dropdown`: Flashcard / Multiple choice / Fill in the blank) that swaps the
+  (`.flash-type-dropdown`: Flashcard / Multiple choice / Fill in the blank / True / false)
+  that swaps the
   field set (`.flash-card-fields`): flashcard = front/back textareas + reversible toggle
   (`.flash-reversible-toggle` → type 2); multiple choice = question/answer/wrong-options
   textareas (distractors one per line; requires ≥1, and none may equal the answer); cloze =
   sentence/hint textareas (requires ≥1 `{{…}}` blank so a blankless card can't be authored
-  by accident). The card is **written to its bank's own file** (`bank.filePath`). Dup-check
+  by accident); true/false = statement textarea + "the statement is correct" toggle
+  (`.tf-correct-toggle`) + optional explanation textarea (statement required). The card is **written to its bank's own file** (`bank.filePath`). Dup-check
   by id (`computeFlashcardId` / `computeMultiChoiceId` / `computeClozeId` — all hash the
   bank, so the same text may live in two banks); duplicate or validation error → inline
   `.flash-add-error` + `Notice`. Stays open after a successful add (text fields clear;
@@ -149,7 +161,10 @@ hotkeys/history.
   and Fisher-Yates-shuffled `.mc-option` buttons (answer + distractors). Wrong pick → red
   border + disabled + mistake++; the correct pick disables everything and fires
   `onComplete(mistakes)` (the view maps mistakes → score). PinyinSelector's interaction
-  model, generalized.
+  model, generalized. Optional `MultiChoiceCardOptions` extras (`prompt` → muted
+  `.mc-prompt` line above the question; `explanation` → `.mc-explanation`, hidden until
+  completion) exist for the true/false card type, which reuses this component instead of
+  duplicating it.
 - `src/components/cloze_card.ts` — `ClozeCard`: `.cloze-card` renders the sentence's
   segments (`parseClozeSegments`) as `.cloze-prompt` with each blank as an underlined
   `.cloze-blank` "____", optional `.cloze-hint`, and a pre-built hidden `.cloze-answer`
@@ -175,7 +190,8 @@ hotkeys/history.
   `computeEntryId(char, pinyin)` (unchanged from the hanzi-only era — existing history must
   stay attached), `computeFlashcardId(bank, front, back)`,
   `computeMultiChoiceId(bank, question, answer)` (distractors NOT hashed — freely
-  editable), and `computeClozeId(bank, text)`. Each (char, pinyin) sense is its own entry
+  editable), `computeClozeId(bank, text)`, and `computeTrueFalseId(bank, statement)`
+  (verdict/explanation NOT hashed). Each (char, pinyin) sense is its own entry
   with its own `id`. `sanitizeField` collapses tabs/newlines in user text so the line
   format survives; `sanitizeOption` additionally rewrites `|` → `/` in multiple-choice
   option text (`|` joins the stored distractor list). `parseClozeSegments` splits a cloze
@@ -255,10 +271,13 @@ needed**; the old hanzi-writer CDN dependency is gone.
   flashcards (types 1/2) f0/f1 = front/back, f2 empty; for multiple choice (type 3)
   f0/f1/f2 = question/answer/distractors joined by `|` (option text is `sanitizeOption`d
   so it never contains `|`); for cloze (type 4) f0/f1 = sentence-with-`{{…}}`-blanks/hint,
-  f2 empty. `pinyin` is numeric CEDICT form; hanzi `id` = `computeEntryId(char, pinyin)`
+  f2 empty; for true/false (type 5) f0/f1/f2 = statement/`true`|`false`/optional
+  explanation (only the literal `true`, case-insensitive, reads as correct — typos fail
+  safe to false). `pinyin` is numeric CEDICT form; hanzi `id` = `computeEntryId(char, pinyin)`
   (historical hash — unchanged), flashcard `id` = `computeFlashcardId(bank, front, back)`,
   multiple-choice `id` = `computeMultiChoiceId(bank, question, answer)`, cloze `id` =
-  `computeClozeId(bank, text)`. A char can appear on several lines (one per
+  `computeClozeId(bank, text)`, true/false `id` = `computeTrueFalseId(bank, statement)`
+  (verdict/explanation NOT hashed — a mislabeled card can be fixed without losing history). A char can appear on several lines (one per
   sense). Old 4-field/3-field and plain one-char lines are still accepted (cardType 0 + bank
   `Hanzi` assumed; id derived when missing; pinyin/def empty). Tabs are used as the separator
   because CEDICT definitions contain `/`, `|`, `;`, `(`, `)`, `:` but never tabs — and
@@ -319,7 +338,7 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
    `jest.config.js` are ignored. `npm run lint:fix` / `npm run format` to auto-fix — but beware:
    `eslint . --fix` on *unformatted* code once produced broken output from overlapping fixes;
    run `npm run format` (plain prettier) first, then `lint:fix`.
-3. `test:unit` — `npx jest`: 202 tests across 22 suites — the data layer
+3. `test:unit` — `npx jest`: 220 tests across 22 suites — the data layer
    (`practice_list` / `card_markdown_roundtrip` (per-card-type markdown save/load round-trips
    pinning the CARD_FORMATS.md format) / `data_pack` (pack JSON parse + bank merge) /
    `example_data_packs` (loads the shipped `examples/data-packs/*.json` + linked card files

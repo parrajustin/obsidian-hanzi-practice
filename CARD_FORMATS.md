@@ -45,6 +45,7 @@ field.
 | `2` | Reversible flashcard (either side prompts) | front | back | *(empty)* | bank + front + back |
 | `3` | Multiple choice (auto-graded) | question | correct answer | distractors joined by `\|` (option text never contains `\|`) | bank + question + answer |
 | `4` | Cloze / fill-in-the-blank (self-graded) | sentence with each answer wrapped in `{{…}}` | optional hint/translation | *(empty)* | bank + sentence |
+| `5` | Is this correct? / true-false (auto-graded) | the statement to judge | `true` or `false` — whether the statement is actually correct | optional explanation of why, revealed after answering | bank + statement |
 
 ### Examples (one of each)
 
@@ -54,6 +55,7 @@ France	Paris		1c50e496	1	Capitals
 dog	Hund		8b6ee5da	2	German
 你__狗吗？	有没有	不有|没不有	b0e7a4d2	3	Grammar
 我一个星期{{没}}吃饭。	I haven't eaten for a week.		e93c11f8	4	German
+你有没有一只狗吗？	false	有没有 already forms the question — drop the 吗。	a1b2c3d4	5	Grammar
 ```
 
 Notes:
@@ -66,6 +68,13 @@ Notes:
   edited freely without resetting the card's history.
 - **Ids hash the bank** (except hanzi), so the same flashcard text in two
   banks is two independent cards.
+- **True/false ids hash only the bank + statement**, so a mislabeled card's
+  verdict or explanation can be fixed without resetting its history. The
+  verdict field must be the literal `true` to count as correct — anything
+  else (including a hand-edit typo) reads as `false`. In the practice view
+  the card renders as the multiple-choice UI with `Correct` / `Incorrect`
+  options under an "Is this correct?" prompt; a right first pick scores 5,
+  any mistake scores 0, and the explanation is revealed after answering.
 
 ### Legacy lines (still accepted)
 

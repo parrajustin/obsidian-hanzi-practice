@@ -28,6 +28,10 @@ const EXAMPLE_PACKS: {file: string; banks: [string, CardType][]}[] = [
   },
   {file: 'chinese-sentences.json', banks: [['Sentences', CardType.CLOZE]]},
   {
+    file: 'true-false-grammar.json',
+    banks: [['Correct or Not', CardType.TRUE_FALSE]],
+  },
+  {
     file: 'starter-all-types.json',
     banks: [
       ['Numbers', CardType.HANZI],
@@ -35,6 +39,7 @@ const EXAMPLE_PACKS: {file: string; banks: [string, CardType][]}[] = [
       ['German Vocab', CardType.REVERSIBLE_FLASHCARD],
       ['Grammar Quiz', CardType.MULTIPLE_CHOICE],
       ['Sentences', CardType.CLOZE],
+      ['Correct or Not', CardType.TRUE_FALSE],
     ],
   },
 ];

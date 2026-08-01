@@ -1,0 +1,7 @@
+{
+  "version": 1,
+  "name": "Chinese grammar (is this correct? true/false)",
+  "banks": [
+    {"name": "Correct or Not", "filePath": "packs/true-false-cards.md"}
+  ]
+}

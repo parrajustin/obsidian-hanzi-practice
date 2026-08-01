@@ -18,8 +18,10 @@ import {
   IsClozeEntry,
   IsFlashcardEntry,
   IsMultiChoiceEntry,
+  IsTrueFalseEntry,
   MultiChoiceEntry,
   PracticeEntry,
+  TrueFalseEntry,
 } from '../utils/practice_list';
 
 /**
@@ -132,6 +134,11 @@ export class HanziPracticeView extends ItemView {
 
     if (nextEntry && IsClozeEntry(nextEntry)) {
       this.renderCloze(container, nextEntry);
+      return;
+    }
+
+    if (nextEntry && IsTrueFalseEntry(nextEntry)) {
+      this.renderTrueFalse(container, nextEntry);
       return;
     }
 
@@ -285,6 +292,42 @@ export class HanziPracticeView extends ItemView {
       score => {
         void this.handleCardGrade(entry, score);
       },
+    );
+    card.render();
+  }
+
+  /**
+   * True/false practice: the multi-choice UI with Correct/Incorrect as the
+   * two options under an "Is this correct?" prompt. Auto-graded — with only
+   * two options a wrong pick reveals the answer, so there is no partial
+   * credit: right first pick → 5, any mistake → 0.
+   */
+  private renderTrueFalse(container: Element, entry: TrueFalseEntry) {
+    container.createEl('h2', {text: `Practice: ${this.bank}`});
+
+    const card = new MultiChoiceCard(
+      container as HTMLElement,
+      entry.statement,
+      entry.isCorrect ? 'Correct' : 'Incorrect',
+      [entry.isCorrect ? 'Incorrect' : 'Correct'],
+      mistakes => {
+        const score = mistakes === 0 ? 5 : 0;
+        void HistoryManager.appendResult(
+          this.plugin.app,
+          this.plugin.settings.historyFilePath,
+          entry,
+          score,
+        );
+        // Unlike plain multiple choice, completing also REVEALS the verdict
+        // and the explanation — leave that readable before advancing (same
+        // pause as the hanzi completion page; cleared on re-render/close).
+        this.advanceTimers.push(
+          window.setTimeout(() => {
+            void this.loadNext();
+          }, 2500),
+        );
+      },
+      {prompt: 'Is this correct?', explanation: entry.explanation},
     );
     card.render();
   }

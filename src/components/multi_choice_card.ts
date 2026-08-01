@@ -1,9 +1,21 @@
+/** Optional extras used by card types that reuse this component. */
+export interface MultiChoiceCardOptions {
+  /** Small muted line above the question, e.g. "Is this correct?". */
+  prompt?: string;
+  /** Revealed once the card completes — the why behind the answer. */
+  explanation?: string;
+}
+
 /**
  * Multiple-choice card: the question is shown with the correct answer and
  * its distractors as shuffled buttons. Wrong picks are marked and counted;
  * the card completes on the correct pick and reports the mistake count —
  * grading is automatic (see the view's mistake→score mapping), never
  * self-graded. Same interaction model as `PinyinSelector`.
+ *
+ * Also renders true/false cards ("Is this correct?" prompt + the statement
+ * as the question + Correct/Incorrect as the two options) — the `options`
+ * extras exist for that reuse rather than a near-identical component.
  */
 export class MultiChoiceCard {
   private container: HTMLElement;
@@ -11,6 +23,7 @@ export class MultiChoiceCard {
   private answer: string;
   private distractors: string[];
   private onComplete: (mistakes: number) => void;
+  private options: MultiChoiceCardOptions;
   private mistakes = 0;
   private buttons: HTMLButtonElement[] = [];
   private completed = false;
@@ -21,12 +34,14 @@ export class MultiChoiceCard {
     answer: string,
     distractors: string[],
     onComplete: (mistakes: number) => void,
+    options: MultiChoiceCardOptions = {},
   ) {
     this.container = container;
     this.question = question;
     this.answer = answer;
     this.distractors = distractors;
     this.onComplete = onComplete;
+    this.options = options;
   }
 
   render() {
@@ -39,6 +54,15 @@ export class MultiChoiceCard {
     card.style.display = 'flex';
     card.style.flexDirection = 'column';
     card.style.gap = '16px';
+
+    if (this.options.prompt) {
+      const promptEl = card.createDiv({
+        cls: 'mc-prompt',
+        text: this.options.prompt,
+      });
+      promptEl.style.textAlign = 'center';
+      promptEl.style.color = 'var(--text-muted)';
+    }
 
     const questionEl = card.createDiv({
       cls: 'mc-question',
@@ -61,6 +85,19 @@ export class MultiChoiceCard {
     optionsEl.style.flexWrap = 'wrap';
     optionsEl.style.justifyContent = 'center';
 
+    // Hidden until the card completes: the why behind the answer.
+    let explanationEl: HTMLElement | null = null;
+    if (this.options.explanation) {
+      explanationEl = card.createDiv({
+        cls: 'mc-explanation',
+        text: this.options.explanation,
+      });
+      explanationEl.style.textAlign = 'center';
+      explanationEl.style.color = 'var(--text-muted)';
+      explanationEl.style.whiteSpace = 'pre-wrap';
+      explanationEl.style.display = 'none';
+    }
+
     for (const option of options) {
       const btn = optionsEl.createEl('button', {
         cls: 'mc-option',
@@ -80,6 +117,7 @@ export class MultiChoiceCard {
             b.disabled = true;
             if (b !== btn) b.style.opacity = '0.5';
           });
+          if (explanationEl) explanationEl.style.display = 'block';
           this.onComplete(this.mistakes);
         } else {
           btn.style.border = '5px solid red';

@@ -6,6 +6,7 @@ import {
   computeClozeId,
   computeFlashcardId,
   computeMultiChoiceId,
+  computeTrueFalseId,
 } from '../src/utils/practice_list';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -183,6 +184,38 @@ describe('AddFlashcardModal', () => {
     );
   });
 
+  it('adds a true/false card (toggle off = the statement is wrong)', async () => {
+    makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
+    selectType(5);
+    setInput(0, '你有没有一只狗吗？');
+    setInput(1, '有没有 already forms the question — drop the 吗.');
+    await clickAdd();
+    const id = computeTrueFalseId('Grammar', '你有没有一只狗吗？');
+    expect(app.vault.create).toHaveBeenCalledWith(
+      'grammar.md',
+      `你有没有一只狗吗？\tfalse\t有没有 already forms the question — drop the 吗.\t${id}\t5\tGrammar`,
+    );
+  });
+
+  it('writes true when the correct toggle is on, and requires a statement', async () => {
+    makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
+    selectType(5);
+    await clickAdd();
+    expect(errorText()).toBe('The statement is required.');
+    expect(app.vault.create).not.toHaveBeenCalled();
+
+    setInput(0, '你有没有一只狗？');
+    (
+      modal.contentEl.querySelector('.tf-correct-toggle') as HTMLElement
+    ).dispatchEvent(new MouseEvent('click'));
+    await clickAdd();
+    const id = computeTrueFalseId('Grammar', '你有没有一只狗？');
+    expect(app.vault.create).toHaveBeenCalledWith(
+      'grammar.md',
+      `你有没有一只狗？\ttrue\t\t${id}\t5\tGrammar`,
+    );
+  });
+
   it('switching the card type swaps the field set', () => {
     makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
     expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(2);
@@ -196,6 +229,9 @@ describe('AddFlashcardModal', () => {
     ).toBeNull();
     selectType(4);
     expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(2);
+    selectType(5);
+    expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(2);
+    expect(modal.contentEl.querySelector('.tf-correct-toggle')).not.toBeNull();
   });
 
   it('picks the bank from the dropdown', async () => {
