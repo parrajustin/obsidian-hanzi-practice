@@ -1678,7 +1678,7 @@ async function run() {
 
     // STEP 11: Multiple-choice card (type 3) — add one to Capitals via the
     // card-type dropdown, then practice it: a wrong pick must be marked and
-    // counted, the correct pick completes and auto-grades (1 mistake → 2).
+    // counted, the correct pick completes and auto-grades (any mistake → 0).
     // Goldens: the shuffled options are DOM-sorted before each screenshot
     // so the pixels are deterministic.
     console.log('STEP 11: Adding a MULTIPLE-CHOICE card to Capitals...');
@@ -1700,9 +1700,10 @@ async function run() {
     await delay(300);
     // Switching the type swaps the field set: question/answer/wrong-options.
     const mcAreas = await page.$$('.modal textarea');
-    if (mcAreas.length !== 3) {
+    // question/answer/wrong-options + the shared optional Explanation field.
+    if (mcAreas.length !== 4) {
       throw new Error(
-        `Expected 3 textareas after selecting Multiple choice, found ${mcAreas.length}`,
+        `Expected 4 textareas after selecting Multiple choice, found ${mcAreas.length}`,
       );
     }
     await mcAreas[0].type('你__狗吗？');
@@ -1850,8 +1851,8 @@ async function run() {
         .forEach(n => (n as HTMLElement).remove());
     });
     await takeAndCompareScreenshot(page, 'step11-mc-wrong-pick');
-    // Now the correct option: completes the card and auto-grades it. One
-    // wrong pick → score 2 (fail — the card comes back today).
+    // Now the correct option: completes the card and auto-grades it. Any
+    // wrong pick → score 0 (fail — the card comes back today).
     await page.evaluate(() => {
       const correct = Array.from(document.querySelectorAll('.mc-option')).find(
         b => b.textContent === '有没有',
@@ -1863,7 +1864,7 @@ async function run() {
       const history = fs.existsSync(historyMdPath)
         ? fs.readFileSync(historyMdPath, 'utf-8')
         : '';
-      if (history.includes(`${mcId} 你__狗吗？ (有没有): 2`)) {
+      if (history.includes(`${mcId} 你__狗吗？ (有没有): 0`)) {
         mcHistoryOk = true;
         break;
       }
@@ -1871,11 +1872,11 @@ async function run() {
     }
     if (!mcHistoryOk) {
       throw new Error(
-        'Multiple-choice card did not auto-grade 2 after one wrong pick',
+        'Multiple-choice card did not auto-grade 0 after one wrong pick',
       );
     }
-    console.log('Verified auto-grade (1 mistake → 2) written to history.');
-    // Score 2 = fail → the card is due again immediately; the view advances
+    console.log('Verified auto-grade (any mistake → 0) written to history.');
+    // Score 0 = fail → the card is due again immediately; the view advances
     // back to it.
     await page.waitForSelector('.mc-card', {timeout: 10000});
     await dump(page, 'step11-mc-regraded');
@@ -1901,9 +1902,10 @@ async function run() {
     await page.select('.modal .flash-type-dropdown', '4'); // Fill in the blank
     await delay(300);
     const clozeAreas = await page.$$('.modal textarea');
-    if (clozeAreas.length !== 2) {
+    // sentence/hint + the shared optional Explanation field.
+    if (clozeAreas.length !== 3) {
       throw new Error(
-        `Expected 2 textareas after selecting Fill in the blank, found ${clozeAreas.length}`,
+        `Expected 3 textareas after selecting Fill in the blank, found ${clozeAreas.length}`,
       );
     }
     await clozeAreas[0].type('我一个星期{{没}}吃饭。');

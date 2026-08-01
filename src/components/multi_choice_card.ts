@@ -2,7 +2,10 @@
 export interface MultiChoiceCardOptions {
   /** Small muted line above the question, e.g. "Is this correct?". */
   prompt?: string;
-  /** Revealed once the card completes — the why behind the answer. */
+  /**
+   * Wrong-answer correction text, revealed the moment a wrong pick happens
+   * (and kept visible). A clean run never shows it.
+   */
   explanation?: string;
 }
 
@@ -85,7 +88,7 @@ export class MultiChoiceCard {
     optionsEl.style.flexWrap = 'wrap';
     optionsEl.style.justifyContent = 'center';
 
-    // Hidden until the card completes: the why behind the answer.
+    // Hidden until a wrong pick happens: the correction/why.
     let explanationEl: HTMLElement | null = null;
     if (this.options.explanation) {
       explanationEl = card.createDiv({
@@ -117,13 +120,13 @@ export class MultiChoiceCard {
             b.disabled = true;
             if (b !== btn) b.style.opacity = '0.5';
           });
-          if (explanationEl) explanationEl.style.display = 'block';
           this.onComplete(this.mistakes);
         } else {
           btn.style.border = '5px solid red';
           btn.disabled = true;
           btn.style.opacity = '0.5';
           this.mistakes++;
+          if (explanationEl) explanationEl.style.display = 'block';
         }
       };
     }

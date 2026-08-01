@@ -22,6 +22,7 @@ export class FlashCard {
   private front: string;
   private back: string;
   private onGrade: (score: number) => void;
+  private explanation: string;
   private graded = false;
 
   constructor(
@@ -29,11 +30,13 @@ export class FlashCard {
     front: string,
     back: string,
     onGrade: (score: number) => void,
+    explanation = '',
   ) {
     this.container = container;
     this.front = front;
     this.back = back;
     this.onGrade = onGrade;
+    this.explanation = explanation;
   }
 
   render() {
@@ -66,6 +69,20 @@ export class FlashCard {
     backEl.style.whiteSpace = 'pre-wrap';
     backEl.style.color = 'var(--text-accent)';
 
+    // Wrong-answer correction: revealed only on a failing self-grade (<3),
+    // so a passing recall never spoils the extra context.
+    let explanationEl: HTMLElement | null = null;
+    if (this.explanation) {
+      explanationEl = card.createDiv({
+        cls: 'flash-explanation',
+        text: this.explanation,
+      });
+      explanationEl.style.display = 'none';
+      explanationEl.style.textAlign = 'center';
+      explanationEl.style.color = 'var(--text-muted)';
+      explanationEl.style.whiteSpace = 'pre-wrap';
+    }
+
     const controls = this.container.createDiv({cls: 'flash-card-controls'});
     const flipBtn = controls.createEl('button', {
       cls: 'flash-card-flip',
@@ -89,6 +106,9 @@ export class FlashCard {
       btn.onclick = () => {
         if (this.graded) return; // one grade per card
         this.graded = true;
+        if (grade.score < 3 && explanationEl) {
+          explanationEl.style.display = 'block';
+        }
         this.onGrade(grade.score);
       };
     }

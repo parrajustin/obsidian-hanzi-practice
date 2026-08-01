@@ -139,7 +139,7 @@ describe('parsePracticeList', () => {
 
   it('parses true/false lines with statement, verdict and explanation', () => {
     const entries = parsePracticeList(
-      '你有没有一只狗吗？\tfalse\t有没有 already forms the question.\tdeadbeef\t5\tGrammar',
+      '你有没有一只狗吗？\tfalse\t\tdeadbeef\t5\tGrammar\t有没有 already forms the question.',
     );
     expect(entries).toHaveLength(1);
     expect(entries[0]).toEqual({
@@ -150,6 +150,32 @@ describe('parsePracticeList', () => {
       isCorrect: false,
       explanation: '有没有 already forms the question.',
     });
+  });
+
+  it('parses the optional 7th explanation field on every card type', () => {
+    const entries = parsePracticeList(
+      [
+        '好\thao3\tgood\taaaaaaaa\t0\tHanzi\tstroke tip',
+        'France\tParis\t\tbbbbbbbb\t1\tCapitals\tThink of the Eiffel Tower.',
+        'Q\tA\tB|C\tcccccccc\t3\tGrammar\tB is a common mix-up.',
+        '四{{个}}月\tfour months\t\tdddddddd\t4\tGrammar\t个 is the measure word.',
+      ].join('\n'),
+    );
+    expect(entries.map(e => e.explanation)).toEqual([
+      'stroke tip',
+      'Think of the Eiffel Tower.',
+      'B is a common mix-up.',
+      '个 is the measure word.',
+    ]);
+  });
+
+  it('leaves explanation unset when the 7th field is absent or empty', () => {
+    const entries = parsePracticeList(
+      'France\tParis\t\tbbbbbbbb\t1\tCapitals\n' +
+        'Spain\tMadrid\t\tcccccccc\t1\tCapitals\t',
+    );
+    expect(entries[0].explanation).toBeUndefined();
+    expect(entries[1].explanation).toBeUndefined();
   });
 
   it('reads only the literal "true" as a correct statement', () => {
@@ -286,6 +312,11 @@ describe('formatPracticeEntry', () => {
       isCorrect: false,
       explanation: '有没有 already forms the question — drop the 吗.',
     });
+    expect(line).toBe(
+      '你有没有一只狗吗？\tfalse\t\t' +
+        `${computeTrueFalseId('Grammar', '你有没有一只狗吗？')}\t5\tGrammar\t` +
+        '有没有 already forms the question — drop the 吗.',
+    );
     const [entry] = parsePracticeList(line);
     expect(entry).toEqual({
       id: computeTrueFalseId('Grammar', '你有没有一只狗吗？'),
@@ -296,6 +327,28 @@ describe('formatPracticeEntry', () => {
       explanation: '有没有 already forms the question — drop the 吗.',
     });
     expect(formatPracticeEntry(entry)).toBe(line);
+  });
+
+  it('writes the explanation as a 7th field only when non-empty', () => {
+    const base = {
+      id: 'bbbbbbbb',
+      cardType: CardType.FLASHCARD as const,
+      bank: 'Capitals',
+      front: 'France',
+      back: 'Paris',
+    };
+    expect(formatPracticeEntry(base)).toBe(
+      'France\tParis\t\tbbbbbbbb\t1\tCapitals',
+    );
+    expect(formatPracticeEntry({...base, explanation: ''})).toBe(
+      'France\tParis\t\tbbbbbbbb\t1\tCapitals',
+    );
+    expect(
+      formatPracticeEntry({...base, explanation: 'Think\tEiffel\nTower'}),
+    ).toBe(
+      // Sanitized like every other field so the line format survives.
+      'France\tParis\t\tbbbbbbbb\t1\tCapitals\tThink Eiffel Tower',
+    );
   });
 
   it('collapses tabs and newlines in flashcard text (line format survives)', () => {

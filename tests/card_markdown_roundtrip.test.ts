@@ -136,9 +136,9 @@ describe('per-card-type markdown lines (the documented format)', () => {
     );
   });
 
-  it('saves a true/false card as statement⇥true|false⇥explanation⇥id⇥5⇥bank', () => {
+  it('saves a true/false card as statement⇥true|false⇥⇥id⇥5⇥bank⇥explanation', () => {
     expect(formatPracticeEntry(TRUE_FALSE)).toBe(
-      `你有没有一只狗吗？\tfalse\t有没有 already forms the question — drop the 吗.\t${TRUE_FALSE.id}\t5\tGrammar`,
+      `你有没有一只狗吗？\tfalse\t\t${TRUE_FALSE.id}\t5\tGrammar\t有没有 already forms the question — drop the 吗.`,
     );
   });
 
@@ -147,6 +147,21 @@ describe('per-card-type markdown lines (the documented format)', () => {
     (_name, entry) => {
       const [loaded] = parsePracticeList(formatPracticeEntry(entry));
       expect(loaded).toEqual(entry);
+    },
+  );
+
+  it.each(ALL_ENTRIES.map(entry => [CardType[entry.cardType], entry]))(
+    'round-trips a %s card with a wrong-answer explanation',
+    (_name, entry) => {
+      const withExplanation = {
+        ...entry,
+        explanation: 'Correction shown when this card is failed.',
+      };
+      const line = formatPracticeEntry(withExplanation);
+      expect(line.split('\t')).toHaveLength(7);
+      const [loaded] = parsePracticeList(line);
+      expect(loaded).toEqual(withExplanation);
+      expect(formatPracticeEntry(loaded)).toBe(line);
     },
   );
 });
@@ -161,9 +176,10 @@ describe('whole-file markdown round-trip', () => {
 
   it('loading derives ids for id-less lines, then saves them stably', () => {
     const withoutIds = ALL_ENTRIES.map(entry => {
-      const [f0, f1, f2, , cardType, bank] =
-        formatPracticeEntry(entry).split('\t');
-      return [f0, f1, f2, '', cardType, bank].join('\t');
+      // Blank only the id field, keeping any trailing explanation intact.
+      const parts = formatPracticeEntry(entry).split('\t');
+      parts[3] = '';
+      return parts.join('\t');
     }).join('\n');
     const loaded = parsePracticeList(withoutIds);
     expect(loaded).toEqual(ALL_ENTRIES);

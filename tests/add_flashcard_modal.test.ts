@@ -193,7 +193,20 @@ describe('AddFlashcardModal', () => {
     const id = computeTrueFalseId('Grammar', '你有没有一只狗吗？');
     expect(app.vault.create).toHaveBeenCalledWith(
       'grammar.md',
-      `你有没有一只狗吗？\tfalse\t有没有 already forms the question — drop the 吗.\t${id}\t5\tGrammar`,
+      `你有没有一只狗吗？\tfalse\t\t${id}\t5\tGrammar\t有没有 already forms the question — drop the 吗.`,
+    );
+  });
+
+  it('writes the shared explanation as a trailing field on any type', async () => {
+    makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
+    setInput(0, 'France');
+    setInput(1, 'Paris');
+    setInput(2, 'Think of the Eiffel Tower.');
+    await clickAdd();
+    const id = computeFlashcardId('Capitals', 'France', 'Paris');
+    expect(app.vault.create).toHaveBeenCalledWith(
+      'capitals.md',
+      `France\tParis\t\t${id}\t1\tCapitals\tThink of the Eiffel Tower.`,
     );
   });
 
@@ -216,19 +229,19 @@ describe('AddFlashcardModal', () => {
     );
   });
 
-  it('switching the card type swaps the field set', () => {
+  it('switching the card type swaps the field set (plus shared Explanation)', () => {
     makeModal([{name: 'Grammar', filePath: 'grammar.md'}]);
-    expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(2);
+    expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(3);
     expect(
       modal.contentEl.querySelector('.flash-reversible-toggle'),
     ).not.toBeNull();
     selectType(3);
-    expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(3);
+    expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(4);
     expect(
       modal.contentEl.querySelector('.flash-reversible-toggle'),
     ).toBeNull();
     selectType(4);
-    expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(2);
+    expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(3);
     selectType(5);
     expect(modal.contentEl.querySelectorAll('textarea')).toHaveLength(2);
     expect(modal.contentEl.querySelector('.tf-correct-toggle')).not.toBeNull();

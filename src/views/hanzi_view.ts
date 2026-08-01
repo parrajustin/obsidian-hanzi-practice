@@ -250,17 +250,16 @@ export class HanziPracticeView extends ItemView {
       container as HTMLElement,
       reversed ? entry.back : entry.front,
       reversed ? entry.front : entry.back,
-      score => {
-        void this.handleCardGrade(entry, score);
-      },
+      score => this.gradeCard(entry, score),
+      entry.explanation,
     );
     card.render();
   }
 
   /**
    * Multiple-choice practice: pick the answer among shuffled distractors.
-   * Auto-graded from the wrong picks — with so few options, one wrong pick
-   * reveals too much to count as a pass: 0 mistakes → 5, 1 → 2, 2+ → 0.
+   * Auto-graded from the wrong picks with no partial credit — with so few
+   * options one wrong pick reveals too much: 0 mistakes → 5, any → 0.
    */
   private renderMultiChoice(container: Element, entry: MultiChoiceEntry) {
     container.createEl('h2', {text: `Practice: ${this.bank}`});
@@ -270,10 +269,8 @@ export class HanziPracticeView extends ItemView {
       entry.question,
       entry.answer,
       entry.distractors,
-      mistakes => {
-        const score = mistakes === 0 ? 5 : mistakes === 1 ? 2 : 0;
-        void this.handleCardGrade(entry, score);
-      },
+      mistakes => this.gradeCard(entry, mistakes === 0 ? 5 : 0),
+      {explanation: entry.explanation},
     );
     card.render();
   }
@@ -289,9 +286,8 @@ export class HanziPracticeView extends ItemView {
       container as HTMLElement,
       entry.text,
       entry.hint,
-      score => {
-        void this.handleCardGrade(entry, score);
-      },
+      score => this.gradeCard(entry, score),
+      entry.explanation,
     );
     card.render();
   }
@@ -310,26 +306,34 @@ export class HanziPracticeView extends ItemView {
       entry.statement,
       entry.isCorrect ? 'Correct' : 'Incorrect',
       [entry.isCorrect ? 'Incorrect' : 'Correct'],
-      mistakes => {
-        const score = mistakes === 0 ? 5 : 0;
-        void HistoryManager.appendResult(
-          this.plugin.app,
-          this.plugin.settings.historyFilePath,
-          entry,
-          score,
-        );
-        // Unlike plain multiple choice, completing also REVEALS the verdict
-        // and the explanation — leave that readable before advancing (same
-        // pause as the hanzi completion page; cleared on re-render/close).
-        this.advanceTimers.push(
-          window.setTimeout(() => {
-            void this.loadNext();
-          }, 2500),
-        );
-      },
+      mistakes => this.gradeCard(entry, mistakes === 0 ? 5 : 0),
       {prompt: 'Is this correct?', explanation: entry.explanation},
     );
     card.render();
+  }
+
+  /**
+   * Grade a non-hanzi card. A failed card (<3) that carries a wrong-answer
+   * explanation just had it revealed by its component, so the advance waits
+   * 2.5s (same pause as the hanzi completion page; timers are cleared on
+   * re-render/close) — otherwise the next card loads immediately.
+   */
+  private gradeCard(entry: PracticeEntry, score: number) {
+    if (score < 3 && entry.explanation) {
+      void HistoryManager.appendResult(
+        this.plugin.app,
+        this.plugin.settings.historyFilePath,
+        entry,
+        score,
+      );
+      this.advanceTimers.push(
+        window.setTimeout(() => {
+          void this.loadNext();
+        }, 2500),
+      );
+      return;
+    }
+    void this.handleCardGrade(entry, score);
   }
 
   /** Append one graded review to history and advance to the next due card. */
@@ -460,6 +464,14 @@ export class HanziPracticeView extends ItemView {
       text: `Your score was ${score}`,
       cls: 'hanzi-complete-score',
     });
+    // Failed hanzi cards surface their wrong-answer correction here — the
+    // completion page is the one moment the user is looking at the result.
+    if (score < 3 && this.currentEntry?.explanation) {
+      page.createEl('p', {
+        text: this.currentEntry.explanation,
+        cls: 'hanzi-complete-explanation',
+      });
+    }
     page.style.opacity = '1';
     page.style.transition = 'opacity 0.4s ease';
     this.advanceTimers.push(

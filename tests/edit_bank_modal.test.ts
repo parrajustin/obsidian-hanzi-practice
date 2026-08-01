@@ -10,7 +10,7 @@ const FLASH_LINE = 'France\tParis\t\tbbbbbbbb\t1\tCapitals';
 const MC_LINE = '你__狗吗？\t有没有\t不有|没不有\tcccccccc\t3\tCapitals';
 const CLOZE_LINE = '四{{个}}月\tfour months\t\tdddddddd\t4\tCapitals';
 const TF_LINE =
-  '你有没有一只狗吗？\tfalse\t有没有 already asks — drop 吗\teeeeeeee\t5\tCapitals';
+  '你有没有一只狗吗？\tfalse\t\teeeeeeee\t5\tCapitals\t有没有 already asks — drop 吗';
 
 describe('EditBankModal', () => {
   let app: App;

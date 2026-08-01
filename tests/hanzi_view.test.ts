@@ -132,7 +132,7 @@ describe('HanziPracticeView', () => {
     );
   });
 
-  it('renders a multiple-choice card and auto-grades 2 after one wrong pick', async () => {
+  it('renders a multiple-choice card and auto-grades 0 after a wrong pick', async () => {
     await openWith(MC, 'Grammar');
     expect(content().querySelector('.mc-question')?.textContent).toBe(
       '你__狗吗？',
@@ -144,11 +144,12 @@ describe('HanziPracticeView', () => {
     option('不有').dispatchEvent(new MouseEvent('click'));
     option('有没有').dispatchEvent(new MouseEvent('click'));
     await flush();
+    // Any wrong pick fails the card outright — no partial credit.
     expect(appendResult).toHaveBeenCalledWith(
       expect.anything(),
       'history.md',
       MC,
-      2,
+      0,
     );
   });
 
@@ -197,7 +198,7 @@ describe('HanziPracticeView', () => {
         b => b.textContent === text,
       ) as HTMLElement;
 
-    it('renders via the multi-choice UI and grades a right pick 5', async () => {
+    it('renders via the multi-choice UI; a right pick grades 5 and advances', async () => {
       await openWith(TRUE_FALSE, 'Grammar');
       expect(content().querySelector('.mc-prompt')?.textContent).toBe(
         'Is this correct?',
@@ -215,20 +216,22 @@ describe('HanziPracticeView', () => {
         TRUE_FALSE,
         5,
       );
+      // A clean answer shows no correction and advances immediately.
+      expect(
+        (content().querySelector('.mc-explanation') as HTMLElement).style
+          .display,
+      ).toBe('none');
+      expect(nextDue).toHaveBeenCalledTimes(2); // onOpen + post-grade advance
+    });
 
-      // The explanation is revealed and the advance waits so it can be read.
+    it('a wrong pick grades 0, reveals the explanation, and pauses', async () => {
+      await openWith(TRUE_FALSE, 'Grammar');
+      option('Correct').dispatchEvent(new MouseEvent('click')); // wrong
+      // The correction appears the moment the wrong pick happens.
       expect(
         (content().querySelector('.mc-explanation') as HTMLElement).style
           .display,
       ).toBe('block');
-      expect(nextDue).toHaveBeenCalledTimes(1); // onOpen only — no advance yet
-      await jest.advanceTimersByTimeAsync(2500);
-      expect(nextDue).toHaveBeenCalledTimes(2); // advanced after the pause
-    });
-
-    it('grades any wrong pick 0 (two options leave no partial credit)', async () => {
-      await openWith(TRUE_FALSE, 'Grammar');
-      option('Correct').dispatchEvent(new MouseEvent('click')); // wrong
       option('Incorrect').dispatchEvent(new MouseEvent('click'));
       await jest.advanceTimersByTimeAsync(0);
       expect(appendResult).toHaveBeenCalledWith(
@@ -237,6 +240,56 @@ describe('HanziPracticeView', () => {
         TRUE_FALSE,
         0,
       );
+      // The advance waits so the explanation stays readable.
+      expect(nextDue).toHaveBeenCalledTimes(1);
+      await jest.advanceTimersByTimeAsync(2500);
+      expect(nextDue).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('wrong-answer explanations on self-graded cards', () => {
+    beforeEach(() => jest.useFakeTimers());
+    afterEach(() => jest.useRealTimers());
+
+    it('a failed flashcard shows its correction and pauses before advancing', async () => {
+      const flash = {...FLASH, explanation: 'Think of the Eiffel Tower.'};
+      await openWith(flash, 'Capitals');
+      (
+        content().querySelector('.flash-card-flip') as HTMLElement
+      ).dispatchEvent(new MouseEvent('click'));
+      const noIdea = Array.from(
+        content().querySelectorAll('.flash-card-grade'),
+      ).find(b => (b as HTMLElement).dataset.score === '0');
+      (noIdea as HTMLElement).dispatchEvent(new MouseEvent('click'));
+      await jest.advanceTimersByTimeAsync(0);
+
+      expect(
+        (content().querySelector('.flash-explanation') as HTMLElement).style
+          .display,
+      ).toBe('block');
+      expect(appendResult).toHaveBeenCalledWith(
+        expect.anything(),
+        'history.md',
+        flash,
+        0,
+      );
+      expect(nextDue).toHaveBeenCalledTimes(1); // paused, not advanced yet
+      await jest.advanceTimersByTimeAsync(2500);
+      expect(nextDue).toHaveBeenCalledTimes(2);
+    });
+
+    it('a passed card advances immediately without the correction', async () => {
+      const flash = {...FLASH, explanation: 'Think of the Eiffel Tower.'};
+      await openWith(flash, 'Capitals');
+      (
+        content().querySelector('.flash-card-flip') as HTMLElement
+      ).dispatchEvent(new MouseEvent('click'));
+      const easy = Array.from(
+        content().querySelectorAll('.flash-card-grade'),
+      ).find(b => (b as HTMLElement).dataset.score === '4');
+      (easy as HTMLElement).dispatchEvent(new MouseEvent('click'));
+      await jest.advanceTimersByTimeAsync(0);
+      expect(nextDue).toHaveBeenCalledTimes(2); // no pause on a pass
     });
   });
 
@@ -326,6 +379,21 @@ describe('HanziPracticeView', () => {
     it('locks the grade to 0 after Give Up', async () => {
       view.handleGiveUp();
       expect(await complete(0)).toBe(0);
+    });
+
+    it('a failed hanzi card surfaces its explanation on the completion page', async () => {
+      await openWith({...HANZI, explanation: '女 + 子 — woman with child.'});
+      view.handleGiveUp(); // locks the score to 0 → fail
+      await complete(0);
+      expect(
+        content().querySelector('.hanzi-complete-explanation')?.textContent,
+      ).toBe('女 + 子 — woman with child.');
+    });
+
+    it('a passed hanzi card keeps the explanation off the completion page', async () => {
+      await openWith({...HANZI, explanation: '女 + 子 — woman with child.'});
+      await complete(0); // clean quiz → 5
+      expect(content().querySelector('.hanzi-complete-explanation')).toBeNull();
     });
 
     it('shows the completion page, then fades into the next card', async () => {

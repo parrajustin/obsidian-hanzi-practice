@@ -14,8 +14,8 @@ practice item is a **card** with a **card type** (how it is practiced) belonging
 - **2 = reversible flashcard**: like 1, but either side may be shown as the prompt.
 - **3 = multiple choice**: question + correct answer + distractors as shuffled buttons
   (`src/components/multi_choice_card.ts`, same interaction as the pinyin selector);
-  auto-graded from wrong picks — 0 mistakes → 5, 1 → 2, 2+ → 0 (with so few options one
-  wrong pick reveals too much to pass).
+  auto-graded from wrong picks with NO partial credit — 0 mistakes → 5, any wrong pick → 0
+  (with so few options one wrong pick reveals too much to pass).
 - **4 = cloze (fill in the blank)**: a sentence with each answer wrapped in `{{…}}`
   (`src/components/cloze_card.ts`); the prompt blanks them out (plus optional hint),
   reveal shows the full sentence, then self-grade exactly like a flashcard (typed answers
@@ -25,9 +25,10 @@ practice item is a **card** with a **card type** (how it is practiced) belonging
   and an optional explanation. **No dedicated component** — renders through
   `MultiChoiceCard` with `Correct`/`Incorrect` as the two options plus its optional
   `prompt` ("Is this correct?" line, `.mc-prompt`) and `explanation` (`.mc-explanation`,
-  revealed on completion) extras. Auto-graded with no partial credit (two options: a wrong
-  pick reveals the answer): right first pick → 5, otherwise → 0; the view then waits 2.5s
-  (via `advanceTimers`) before advancing so the reveal + explanation stay readable.
+  revealed on a wrong pick) extras. Auto-graded with no partial credit (two options: a
+  wrong pick reveals the answer): right first pick → 5, otherwise → 0; a failed card with
+  an explanation pauses 2.5s before advancing (`gradeCard` via `advanceTimers`) so the
+  correction stays readable.
 
 All types feed the same SuperMemo-2-style spaced-repetition engine and track history in plain
 markdown files inside the vault. Ids (view type `hanzi-practice-view`, command ids, entry-id
@@ -50,8 +51,10 @@ hotkeys/history.
   ONE bank (`bank` is view state via `setState`/`getState`, default `Hanzi`, so it persists in
   the workspace layout) and renders whatever UI the due card's type needs: flashcards get a
   `FlashCard`, multiple-choice cards a `MultiChoiceCard` (auto-grade mapping lives in
-  `renderMultiChoice`), cloze cards a `ClozeCard` — all three funnel into `handleCardGrade`
-  (appends history, advances); an empty non-Hanzi bank shows `.practice-empty`. Hanzi cards: picks the next due char, reads
+  `renderMultiChoice`), cloze cards a `ClozeCard`, true/false cards the `MultiChoiceCard`
+  reuse (`renderTrueFalse`) — all funnel into `gradeCard` (appends history, then advances —
+  immediately on a pass, after a 2.5s pause when a failed card revealed its wrong-answer
+  explanation); an empty non-Hanzi bank shows `.practice-empty`. Hanzi cards: picks the next due char, reads
   its **cached** pinyin + English def **from the practice list** (never CEDICT), renders the
   `Meaning:` line (`.hanzi-meaning`) + `PinyinSelector` (`.tone-selector`) + the quiz writer's
   draw box. **Grading is gated on BOTH parts** (`maybeFinishAttempt`): the writer's
@@ -156,15 +159,17 @@ hotkeys/history.
 - `src/components/flash_card.ts` — `FlashCard`: `.flash-card` (front, hidden back) +
   `.flash-card-flip` "Show Answer" button; flipping reveals the back and swaps in
   `.flash-card-grades` (one `.flash-card-grade` button per `FLASHCARD_GRADES` entry,
-  `data-score` attr). One grade per card; grading an unseen answer is impossible.
+  `data-score` attr). One grade per card; grading an unseen answer is impossible. Optional
+  trailing `explanation` constructor arg → hidden `.flash-explanation`, revealed only on a
+  failing (<3) self-grade (`ClozeCard` mirrors this with `.cloze-explanation`).
 - `src/components/multi_choice_card.ts` — `MultiChoiceCard`: `.mc-card` with `.mc-question`
   and Fisher-Yates-shuffled `.mc-option` buttons (answer + distractors). Wrong pick → red
   border + disabled + mistake++; the correct pick disables everything and fires
   `onComplete(mistakes)` (the view maps mistakes → score). PinyinSelector's interaction
-  model, generalized. Optional `MultiChoiceCardOptions` extras (`prompt` → muted
-  `.mc-prompt` line above the question; `explanation` → `.mc-explanation`, hidden until
-  completion) exist for the true/false card type, which reuses this component instead of
-  duplicating it.
+  model, generalized. Optional `MultiChoiceCardOptions` extras: `prompt` (muted
+  `.mc-prompt` line above the question — used by true/false, which reuses this component
+  instead of duplicating it) and `explanation` (`.mc-explanation`, revealed the moment a
+  wrong pick happens and kept visible; never shown on a clean run).
 - `src/components/cloze_card.ts` — `ClozeCard`: `.cloze-card` renders the sentence's
   segments (`parseClozeSegments`) as `.cloze-prompt` with each blank as an underlined
   `.cloze-blank` "____", optional `.cloze-hint`, and a pre-built hidden `.cloze-answer`
@@ -265,7 +270,9 @@ needed**; the old hanzi-writer CDN dependency is gone.
   the Hanzi bank; every settings-configured bank names its own file (e.g.
   `capitals-cards.md`). A card's bank comes from the file it lives in — except lines in the
   hanzi file, which keep their line-level bank tag (pre-per-bank-file data).
-- Line format — one card per line, **TAB-separated**, 6 fields:
+- Line format — one card per line, **TAB-separated**, 6 fields + an optional trailing
+  `explanation` field (wrong-answer correction, any type; written only when non-empty,
+  ignored by older plugin versions):
   `f0⇥f1⇥f2⇥id⇥cardType⇥bank`. For hanzi cards (type 0) f0/f1/f2 =
   char/pinyin/english (e.g. `好\thao3\tgood/appropriate; …\t<8-hex id>\t0\tHanzi`); for
   flashcards (types 1/2) f0/f1 = front/back, f2 empty; for multiple choice (type 3)
@@ -297,7 +304,13 @@ due immediately; passing → review #1 `+1` day, #2 `+6`, #3+ `lastReviewDay + c
 (`>1`→3, `1`→4, `0`→5) — **unless Give Up was pressed, which locks the grade to 0** no matter
 how the guided strokes are then traced. Flashcards and cloze cards skip all of that: the
 user self-grades (`FLASHCARD_GRADES` button → 5/4/3/2/0) and that value feeds the scheduler
-directly. Multiple-choice cards auto-grade from wrong picks: 0 → 5, 1 → 2, 2+ → 0. Full
+directly. Multiple-choice and true/false cards auto-grade from wrong picks with no partial
+credit: 0 mistakes → 5, any → 0. **Every card type carries an optional wrong-answer
+explanation** (the trailing line-format field): auto-graded cards reveal it the moment a
+wrong pick happens (`.mc-explanation`), self-graded cards reveal it on a failing grade
+(`.flash-explanation`/`.cloze-explanation`), failed hanzi cards show it on the completion
+page (`.hanzi-complete-explanation`) — and the view's `gradeCard` pauses 2.5s before
+advancing a failed card that has one, so the correction stays readable. Full
 spec in `hanzi-practice-architecture.md`.
 
 ---
@@ -338,7 +351,7 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
    `jest.config.js` are ignored. `npm run lint:fix` / `npm run format` to auto-fix — but beware:
    `eslint . --fix` on *unformatted* code once produced broken output from overlapping fixes;
    run `npm run format` (plain prettier) first, then `lint:fix`.
-3. `test:unit` — `npx jest`: 220 tests across 22 suites — the data layer
+3. `test:unit` — `npx jest`: 238 tests across 22 suites — the data layer
    (`practice_list` / `card_markdown_roundtrip` (per-card-type markdown save/load round-trips
    pinning the CARD_FORMATS.md format) / `data_pack` (pack JSON parse + bank merge) /
    `example_data_packs` (loads the shipped `examples/data-packs/*.json` + linked card files
@@ -466,8 +479,8 @@ Then re-run `npm run test:e2e:docker` and confirm every `[visual]` line reports 
    capitals-cards.md. Practicing Capitals must show the MC card (only strictly-due card —
    France was graded in step 9), with the question and exactly the 3 shuffled options;
    clicking the wrong option `不有` must mark it red + disabled WITHOUT completing;
-   clicking `有没有` completes and auto-grades → history `<id> 你__狗吗？ (有没有): 2`
-   (1 mistake → 2 = fail), and the view re-shows the card (due again today). Goldens
+   clicking `有没有` completes and auto-grades → history `<id> 你__狗吗？ (有没有): 0`
+   (any mistake → 0 = fail), and the view re-shows the card (due again today). Goldens
    `step11-add-mc` / `step11-mc-options` / `step11-mc-wrong-pick` — the shuffled option
    buttons are DOM-sorted (by text) before each screenshot so the pixels are
    deterministic; the post-grade reshuffle stays dump-only.

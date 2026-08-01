@@ -4,9 +4,14 @@
  * card type (how it is practiced) and belongs to a bank (a named cluster of
  * cards practiced together, e.g. "Hanzi" or "Capitals").
  *
- * Line format (current, 6 fields):
+ * Line format (current, 6 fields + one optional trailing field):
  *
- *     <f0>\t<f1>\t<f2>\t<id>\t<cardType>\t<bank>
+ *     <f0>\t<f1>\t<f2>\t<id>\t<cardType>\t<bank>[\t<explanation>]
+ *
+ * The trailing `explanation` is a wrong-answer correction text available to
+ * EVERY card type (grammar rule for true/false, why-your-pick-was-wrong for
+ * multiple choice, …), revealed when the card is failed. It is only written
+ * when non-empty, and older plugin versions simply ignore the extra field.
  *
  * Per card type the first three fields mean:
  *   - Hanzi (0):      character, numeric pinyin (e.g. `hao3`), English def.
@@ -19,7 +24,8 @@
  *   - Cloze / fill-in-the-blank (4): sentence with each answer wrapped in
  *     `{{…}}`, optional hint/translation, (unused).
  *   - True/false (5): the statement being judged, `true`/`false` (whether the
- *     statement is actually correct), optional explanation of why.
+ *     statement is actually correct), (unused) — the explanation of why lives
+ *     in the shared trailing field like every other type.
  *
  * Older hanzi lines are still parsed: 4-field lines (no cardType/bank),
  * 3-field lines (no id — derived), and plain single-character lines (the
@@ -66,6 +72,11 @@ interface BaseEntry {
   cardType: CardType;
   /** Named cluster of cards practiced together. */
   bank: string;
+  /**
+   * Optional wrong-answer correction text, revealed when the card is failed
+   * (never part of the id, so it can be edited without losing history).
+   */
+  explanation?: string;
 }
 
 export interface HanziEntry extends BaseEntry {
@@ -105,8 +116,6 @@ export interface TrueFalseEntry extends BaseEntry {
   statement: string;
   /** Whether the statement is actually correct. */
   isCorrect: boolean;
-  /** Optional explanation of why, shown after answering. */
-  explanation: string;
 }
 
 export type PracticeEntry =
@@ -283,6 +292,10 @@ export function parsePracticeList(text: string): PracticeEntry[] {
         ? cardTypeRaw
         : CardType.HANZI;
     const bank = (parts[5] ?? '').trim() || HANZI_BANK;
+    // The optional trailing wrong-answer correction; only set when present
+    // so entries without one round-trip back to 6-field lines.
+    const explanation = (parts[6] ?? '').trim();
+    const extra = explanation ? {explanation} : {};
     if (cardType === CardType.MULTIPLE_CHOICE) {
       entries.push({
         id: id || computeMultiChoiceId(bank, f0, f1),
@@ -294,6 +307,7 @@ export function parsePracticeList(text: string): PracticeEntry[] {
           .split(DISTRACTOR_SEP)
           .map(d => d.trim())
           .filter(d => d.length > 0),
+        ...extra,
       });
     } else if (cardType === CardType.CLOZE) {
       entries.push({
@@ -302,6 +316,7 @@ export function parsePracticeList(text: string): PracticeEntry[] {
         bank,
         text: f0,
         hint: f1,
+        ...extra,
       });
     } else if (cardType === CardType.TRUE_FALSE) {
       entries.push({
@@ -312,7 +327,7 @@ export function parsePracticeList(text: string): PracticeEntry[] {
         // Anything but the literal "true" (a hand-edit typo, say) reads as
         // false — the safer direction for an "is this correct?" card.
         isCorrect: f1.toLowerCase() === 'true',
-        explanation: f2,
+        ...extra,
       });
     } else if (cardType === CardType.HANZI) {
       entries.push({
@@ -323,6 +338,7 @@ export function parsePracticeList(text: string): PracticeEntry[] {
         character: f0,
         pinyin: f1,
         english: f2,
+        ...extra,
       });
     } else {
       entries.push({
@@ -331,6 +347,7 @@ export function parsePracticeList(text: string): PracticeEntry[] {
         bank,
         front: f0,
         back: f1,
+        ...extra,
       });
     }
   }
@@ -339,12 +356,18 @@ export function parsePracticeList(text: string): PracticeEntry[] {
 
 /** Serialize one entry back to a single tab-separated line (no trailing newline). */
 export function formatPracticeEntry(entry: PracticeEntry): string {
+  // The shared trailing field: appended only when non-empty so cards without
+  // a correction keep the plain 6-field line.
+  const explanation = sanitizeField(entry.explanation ?? '');
+  const withExplanation = (fields: string[]) =>
+    (explanation ? [...fields, explanation] : fields).join(FIELD_SEP);
+
   if (IsFlashcardEntry(entry)) {
     const front = sanitizeField(entry.front);
     const back = sanitizeField(entry.back);
     const bank = sanitizeField(entry.bank);
     const id = entry.id || computeFlashcardId(bank, front, back);
-    return [front, back, '', id, String(entry.cardType), bank].join(FIELD_SEP);
+    return withExplanation([front, back, '', id, String(entry.cardType), bank]);
   }
   if (IsMultiChoiceEntry(entry)) {
     const question = sanitizeField(entry.question);
@@ -355,45 +378,44 @@ export function formatPracticeEntry(entry: PracticeEntry): string {
       .join(DISTRACTOR_SEP);
     const bank = sanitizeField(entry.bank);
     const id = entry.id || computeMultiChoiceId(bank, question, answer);
-    return [
+    return withExplanation([
       question,
       answer,
       distractors,
       id,
       String(entry.cardType),
       bank,
-    ].join(FIELD_SEP);
+    ]);
   }
   if (IsClozeEntry(entry)) {
     const text = sanitizeField(entry.text);
     const hint = sanitizeField(entry.hint);
     const bank = sanitizeField(entry.bank);
     const id = entry.id || computeClozeId(bank, text);
-    return [text, hint, '', id, String(entry.cardType), bank].join(FIELD_SEP);
+    return withExplanation([text, hint, '', id, String(entry.cardType), bank]);
   }
   if (IsTrueFalseEntry(entry)) {
     const statement = sanitizeField(entry.statement);
-    const explanation = sanitizeField(entry.explanation);
     const bank = sanitizeField(entry.bank);
     const id = entry.id || computeTrueFalseId(bank, statement);
-    return [
+    return withExplanation([
       statement,
       String(entry.isCorrect),
-      explanation,
+      '',
       id,
       String(entry.cardType),
       bank,
-    ].join(FIELD_SEP);
+    ]);
   }
   const id = entry.id || computeEntryId(entry.character, entry.pinyin);
-  return [
+  return withExplanation([
     entry.character,
     entry.pinyin,
     entry.english,
     id,
     String(CardType.HANZI),
     sanitizeField(entry.bank || HANZI_BANK),
-  ].join(FIELD_SEP);
+  ]);
 }
 
 /**

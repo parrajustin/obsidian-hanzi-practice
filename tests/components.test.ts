@@ -49,6 +49,43 @@ describe('FlashCard', () => {
     expect(onGrade).toHaveBeenCalledTimes(1);
     expect(onGrade).toHaveBeenCalledWith(4);
   });
+
+  it('renders no explanation element unless one is given', () => {
+    new FlashCard(container, 'F', 'B', jest.fn()).render();
+    expect(container.querySelector('.flash-explanation')).toBeNull();
+  });
+
+  it('reveals the explanation only on a failing self-grade', () => {
+    new FlashCard(
+      container,
+      'France',
+      'Paris',
+      jest.fn(),
+      'Think of the Eiffel Tower.',
+    ).render();
+    const explanation = container.querySelector(
+      '.flash-explanation',
+    ) as HTMLElement;
+    expect(explanation.style.display).toBe('none');
+
+    click(container.querySelector('.flash-card-flip'));
+    expect(explanation.style.display).toBe('none'); // flip alone never shows it
+    const buttons = container.querySelectorAll('.flash-card-grade');
+    click(buttons[4]); // No Idea = 0 → fail
+    expect(explanation.style.display).toBe('block');
+    expect(explanation.textContent).toBe('Think of the Eiffel Tower.');
+  });
+
+  it('keeps the explanation hidden on a passing self-grade', () => {
+    new FlashCard(container, 'F', 'B', jest.fn(), 'why').render();
+    click(container.querySelector('.flash-card-flip'));
+    const buttons = container.querySelectorAll('.flash-card-grade');
+    click(buttons[2]); // Hard = 3 → still a pass
+    expect(
+      (container.querySelector('.flash-explanation') as HTMLElement).style
+        .display,
+    ).toBe('none');
+  });
 });
 
 describe('MultiChoiceCard', () => {
@@ -124,7 +161,7 @@ describe('MultiChoiceCard', () => {
   // The true/false card type reuses this component: the statement is the
   // question, Correct/Incorrect are the two options, and the optional
   // prompt/explanation extras carry the "Is this correct?" framing.
-  it('shows the prompt line and reveals the explanation on completion', () => {
+  it('reveals the wrong-answer explanation the moment a pick is wrong', () => {
     const onComplete = jest.fn();
     new MultiChoiceCard(
       container,
@@ -146,15 +183,17 @@ describe('MultiChoiceCard', () => {
     ) as HTMLElement;
     expect(explanation.style.display).toBe('none');
 
-    click(option('Incorrect'));
-    expect(onComplete).toHaveBeenCalledWith(0);
+    click(option('Correct')); // wrong — the statement is incorrect
     expect(explanation.style.display).toBe('block');
     expect(explanation.textContent).toBe(
       '有没有 already forms the question — drop the 吗.',
     );
+    click(option('Incorrect'));
+    expect(onComplete).toHaveBeenCalledWith(1);
+    expect(explanation.style.display).toBe('block'); // stays visible
   });
 
-  it('keeps the explanation hidden across wrong picks until completion', () => {
+  it('never shows the explanation on a clean run', () => {
     const onComplete = jest.fn();
     new MultiChoiceCard(
       container,
@@ -168,11 +207,9 @@ describe('MultiChoiceCard', () => {
       '.mc-explanation',
     ) as HTMLElement;
 
-    click(option('Correct')); // wrong — the statement is incorrect
+    click(option('Incorrect')); // right first try
+    expect(onComplete).toHaveBeenCalledWith(0);
     expect(explanation.style.display).toBe('none');
-    click(option('Incorrect'));
-    expect(onComplete).toHaveBeenCalledWith(1);
-    expect(explanation.style.display).toBe('block');
   });
 });
 
@@ -229,6 +266,27 @@ describe('ClozeCard', () => {
     click(grades[0]); // ignored — one grade per card
     expect(onGrade).toHaveBeenCalledTimes(1);
     expect(onGrade).toHaveBeenCalledWith(3);
+  });
+
+  it('reveals the explanation only on a failing self-grade', () => {
+    new ClozeCard(
+      container,
+      '我一个星期{{没}}吃饭。',
+      '',
+      jest.fn(),
+      '没 negates completed actions here.',
+    ).render();
+    const explanation = container.querySelector(
+      '.cloze-explanation',
+    ) as HTMLElement;
+    expect(explanation.style.display).toBe('none');
+
+    click(container.querySelector('.cloze-reveal'));
+    expect(explanation.style.display).toBe('none');
+    const grades = container.querySelectorAll('.cloze-grade');
+    click(grades[3]); // Very Hard = 2 → fail
+    expect(explanation.style.display).toBe('block');
+    expect(explanation.textContent).toBe('没 negates completed actions here.');
   });
 });
 

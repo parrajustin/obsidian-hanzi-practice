@@ -13,6 +13,7 @@ export class ClozeCard {
   private text: string;
   private hint: string;
   private onGrade: (score: number) => void;
+  private explanation: string;
   private graded = false;
 
   constructor(
@@ -20,11 +21,13 @@ export class ClozeCard {
     text: string,
     hint: string,
     onGrade: (score: number) => void,
+    explanation = '',
   ) {
     this.container = container;
     this.text = text;
     this.hint = hint;
     this.onGrade = onGrade;
+    this.explanation = explanation;
   }
 
   render() {
@@ -86,6 +89,20 @@ export class ClozeCard {
       }
     }
 
+    // Wrong-answer correction: revealed only on a failing self-grade (<3),
+    // so a passing recall never spoils the extra context.
+    let explanationEl: HTMLElement | null = null;
+    if (this.explanation) {
+      explanationEl = card.createDiv({
+        cls: 'cloze-explanation',
+        text: this.explanation,
+      });
+      explanationEl.style.display = 'none';
+      explanationEl.style.textAlign = 'center';
+      explanationEl.style.color = 'var(--text-muted)';
+      explanationEl.style.whiteSpace = 'pre-wrap';
+    }
+
     const controls = this.container.createDiv({cls: 'cloze-controls'});
     const revealBtn = controls.createEl('button', {
       cls: 'cloze-reveal',
@@ -109,6 +126,9 @@ export class ClozeCard {
       btn.onclick = () => {
         if (this.graded) return; // one grade per card
         this.graded = true;
+        if (grade.score < 3 && explanationEl) {
+          explanationEl.style.display = 'block';
+        }
         this.onGrade(grade.score);
       };
     }

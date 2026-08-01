@@ -27,8 +27,11 @@ import {
  *   - Fill in the blank: a sentence with each answer wrapped in `{{…}}`,
  *     plus an optional hint; at least one `{{…}}` blank is required so a
  *     blankless card can't be authored by accident.
- *   - True / false: a statement, a "the statement is correct" toggle, and an
- *     optional explanation shown after answering.
+ *   - True / false: a statement + a "the statement is correct" toggle.
+ *
+ * Every card type also gets an optional Explanation field — wrong-answer
+ * correction text revealed when the card is failed (grammar rules for
+ * true/false, why-the-pick-was-wrong for multiple choice, …).
  *
  * The modal stays open after a successful add so a batch of cards can be
  * entered in one sitting (text fields clear; bank + type + toggle stick).
@@ -46,7 +49,7 @@ export class AddFlashcardModal extends Modal {
   private clozeHint = '';
   private tfStatement = '';
   private tfIsCorrect = false;
-  private tfExplanation = '';
+  private explanation = '';
   private plugin: HanziPracticePlugin;
   private settings: HanziPluginSettings;
   private errorEl!: HTMLElement;
@@ -164,10 +167,7 @@ export class AddFlashcardModal extends Modal {
         'e.g. 不有\n没不有',
         v => (this.distractorsText = v),
       );
-      return;
-    }
-
-    if (this.cardType === CardType.CLOZE) {
+    } else if (this.cardType === CardType.CLOZE) {
       addTextArea(
         'Sentence',
         'Wrap each blanked-out answer in double braces.',
@@ -180,10 +180,7 @@ export class AddFlashcardModal extends Modal {
         "e.g. I haven't eaten for a week.",
         v => (this.clozeHint = v),
       );
-      return;
-    }
-
-    if (this.cardType === CardType.TRUE_FALSE) {
+    } else if (this.cardType === CardType.TRUE_FALSE) {
       addTextArea(
         'Statement',
         'The statement to judge — it may be right or wrong.',
@@ -199,36 +196,38 @@ export class AddFlashcardModal extends Modal {
             this.tfIsCorrect = value;
           });
         });
+    } else {
       addTextArea(
-        'Explanation',
-        'Optional: why the statement is right or wrong, shown after answering.',
-        'e.g. 有没有 already forms the question — drop the 吗.',
-        v => (this.tfExplanation = v),
+        'Front',
+        'The prompt side of the card.',
+        'e.g. Capital of France?',
+        v => (this.front = v),
       );
-      return;
+      addTextArea(
+        'Back',
+        'The answer side of the card.',
+        'e.g. Paris',
+        v => (this.back = v),
+      );
+      new Setting(this.fieldsEl)
+        .setName('Reversible')
+        .setDesc('When practicing, either side may be shown as the prompt.')
+        .addToggle(toggle => {
+          toggle.toggleEl.addClass('flash-reversible-toggle');
+          toggle.setValue(this.reversible).onChange(value => {
+            this.reversible = value;
+          });
+        });
     }
 
+    // Every card type: optional wrong-answer correction, revealed when the
+    // card is failed (auto-graded wrong pick or failing self-grade).
     addTextArea(
-      'Front',
-      'The prompt side of the card.',
-      'e.g. Capital of France?',
-      v => (this.front = v),
+      'Explanation',
+      'Optional: correction shown when the card is answered wrong — e.g. the grammar rule, or why a tempting choice fails.',
+      'e.g. 有没有 already forms the question — drop the 吗.',
+      v => (this.explanation = v),
     );
-    addTextArea(
-      'Back',
-      'The answer side of the card.',
-      'e.g. Paris',
-      v => (this.back = v),
-    );
-    new Setting(this.fieldsEl)
-      .setName('Reversible')
-      .setDesc('When practicing, either side may be shown as the prompt.')
-      .addToggle(toggle => {
-        toggle.toggleEl.addClass('flash-reversible-toggle');
-        toggle.setValue(this.reversible).onChange(value => {
-          this.reversible = value;
-        });
-      });
   }
 
   private showError(msg: string) {
@@ -244,6 +243,10 @@ export class AddFlashcardModal extends Modal {
 
   /** Validate the current field set into an entry, or null (error shown). */
   private buildEntry(bankName: string): PracticeEntry | null {
+    // Shared optional wrong-answer correction; omitted when empty so the
+    // stored line stays 6 fields.
+    const explanation = sanitizeField(this.explanation);
+    const extra = explanation ? {explanation} : {};
     if (this.cardType === CardType.MULTIPLE_CHOICE) {
       const question = sanitizeField(this.question);
       const answer = sanitizeOption(this.answer);
@@ -270,6 +273,7 @@ export class AddFlashcardModal extends Modal {
         question,
         answer,
         distractors,
+        ...extra,
       };
     }
 
@@ -292,12 +296,12 @@ export class AddFlashcardModal extends Modal {
         bank: bankName,
         text,
         hint,
+        ...extra,
       };
     }
 
     if (this.cardType === CardType.TRUE_FALSE) {
       const statement = sanitizeField(this.tfStatement);
-      const explanation = sanitizeField(this.tfExplanation);
       if (!statement) {
         this.showError('The statement is required.');
         return null;
@@ -308,7 +312,7 @@ export class AddFlashcardModal extends Modal {
         bank: bankName,
         statement,
         isCorrect: this.tfIsCorrect,
-        explanation,
+        ...extra,
       };
     }
 
@@ -326,6 +330,7 @@ export class AddFlashcardModal extends Modal {
       bank: bankName,
       front,
       back,
+      ...extra,
     };
   }
 
@@ -375,7 +380,7 @@ export class AddFlashcardModal extends Modal {
     this.clozeText = '';
     this.clozeHint = '';
     this.tfStatement = '';
-    this.tfExplanation = '';
+    this.explanation = '';
     for (const input of this.textInputs) {
       input.value = '';
     }

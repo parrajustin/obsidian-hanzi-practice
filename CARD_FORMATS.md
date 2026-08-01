@@ -18,19 +18,25 @@ cards practiced together). Each bank stores its cards in **one markdown file**:
 
 ## Card line format
 
-A bank file holds **one card per line**, with **6 TAB-separated fields**
-(shown here as `⇥`):
+A bank file holds **one card per line**, with **6 TAB-separated fields** plus
+one optional trailing field (shown here as `⇥`):
 
 ```
-f0 ⇥ f1 ⇥ f2 ⇥ id ⇥ cardType ⇥ bank
+f0 ⇥ f1 ⇥ f2 ⇥ id ⇥ cardType ⇥ bank [⇥ explanation]
 ```
 
 - `id` — stable 8-hex-char identity of the card (FNV-1a hash; see below).
   History lines are keyed by it. If the field is empty it is derived on load.
-- `cardType` — how the card is practiced: `0`–`4`, see the table below.
+- `cardType` — how the card is practiced: `0`–`5`, see the table below.
 - `bank` — the bank name tag. Note: the file a card lives in decides its
   bank; this tag only matters inside the Hanzi file (see "How banks are
   loaded").
+- `explanation` — optional **wrong-answer correction text**, available to
+  every card type: the grammar rule behind a true/false statement, why a
+  tempting multiple-choice pick is wrong, a mnemonic for a flashcard, … It is
+  revealed only when you get the card wrong (see "Wrong answers &
+  explanations" below), written only when non-empty, and ignored by older
+  plugin versions.
 
 Tabs are the separator because CEDICT definitions contain `/ | ; ( ) :` but
 never tabs; card text is sanitized so tabs/newlines never appear inside a
@@ -45,7 +51,7 @@ field.
 | `2` | Reversible flashcard (either side prompts) | front | back | *(empty)* | bank + front + back |
 | `3` | Multiple choice (auto-graded) | question | correct answer | distractors joined by `\|` (option text never contains `\|`) | bank + question + answer |
 | `4` | Cloze / fill-in-the-blank (self-graded) | sentence with each answer wrapped in `{{…}}` | optional hint/translation | *(empty)* | bank + sentence |
-| `5` | Is this correct? / true-false (auto-graded) | the statement to judge | `true` or `false` — whether the statement is actually correct | optional explanation of why, revealed after answering | bank + statement |
+| `5` | Is this correct? / true-false (auto-graded) | the statement to judge | `true` or `false` — whether the statement is actually correct | *(empty)* | bank + statement |
 
 ### Examples (one of each)
 
@@ -55,8 +61,11 @@ France	Paris		1c50e496	1	Capitals
 dog	Hund		8b6ee5da	2	German
 你__狗吗？	有没有	不有|没不有	b0e7a4d2	3	Grammar
 我一个星期{{没}}吃饭。	I haven't eaten for a week.		e93c11f8	4	German
-你有没有一只狗吗？	false	有没有 already forms the question — drop the 吗。	a1b2c3d4	5	Grammar
+你有没有一只狗吗？	false		a1b2c3d4	5	Grammar	有没有 already forms the question — drop the 吗。
 ```
+
+The last line shows the optional trailing `explanation` field (here on a
+true/false card, but any type can carry one).
 
 Notes:
 
@@ -73,8 +82,23 @@ Notes:
   verdict field must be the literal `true` to count as correct — anything
   else (including a hand-edit typo) reads as `false`. In the practice view
   the card renders as the multiple-choice UI with `Correct` / `Incorrect`
-  options under an "Is this correct?" prompt; a right first pick scores 5,
-  any mistake scores 0, and the explanation is revealed after answering.
+  options under an "Is this correct?" prompt.
+- **Auto-graded cards (multiple choice and true/false) give no partial
+  credit**: a clean first pick scores 5, any wrong pick fails the card with
+  a 0 (the card comes back the same day).
+
+### Wrong answers & explanations
+
+When a card with an `explanation` is answered wrong, the correction is shown:
+
+- **Multiple choice / true-false** — revealed the moment a wrong pick
+  happens (and stays visible); a clean run never shows it.
+- **Flashcards / cloze** — revealed when you self-grade below 3 (Very Hard
+  or No Idea); passing grades keep it hidden.
+- **Hanzi** — shown on the completion page when the final score is below 3.
+
+After a failed card reveals its explanation, the view waits ~2.5 s before
+advancing so the correction stays readable.
 
 ### Legacy lines (still accepted)
 
