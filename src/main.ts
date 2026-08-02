@@ -124,7 +124,7 @@ export default class HanziPracticePlugin extends Plugin {
     });
   }
 
-  async activateView(bank: string = HANZI_BANK) {
+  async activateView(banks: string | string[] = HANZI_BANK) {
     const {workspace} = this.app;
 
     // Reuse an existing practice tab if one is already open.
@@ -138,11 +138,13 @@ export default class HanziPracticePlugin extends Plugin {
     }
 
     // Always set the state: an already-open practice tab switches to the
-    // chosen bank (the bank is view state — see HanziPracticeView.setState).
+    // chosen bank(s) (view state — see HanziPracticeView.setState; single
+    // banks keep the historical {bank} shape).
+    const bankList = typeof banks === 'string' ? [banks] : banks;
     await leaf.setViewState({
       type: HANZI_VIEW_TYPE,
       active: true,
-      state: {bank},
+      state: bankList.length === 1 ? {bank: bankList[0]} : {banks: bankList},
     });
     await workspace.revealLeaf(leaf);
   }

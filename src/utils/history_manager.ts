@@ -251,10 +251,15 @@ export class HistoryManager {
     app: App,
     historyFilePath: string,
     sources: BankSource[],
-    bank: string,
+    banks: string | string[],
   ): Promise<PracticeEntry | null> {
+    // One bank or several practiced together — the union schedules as one
+    // pool (most-overdue card first, regardless of which bank it is in).
+    const bankSet = new Set(typeof banks === 'string' ? [banks] : banks);
     const allEntries = await this.loadAllPracticeEntries(app, sources);
-    const entries = allEntries.filter(e => e.bank === bank && isPracticable(e));
+    const entries = allEntries.filter(
+      e => bankSet.has(e.bank) && isPracticable(e),
+    );
 
     if (entries.length === 0) return null;
 

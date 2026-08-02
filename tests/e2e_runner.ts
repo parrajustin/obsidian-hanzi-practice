@@ -1,4 +1,5 @@
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as cp from 'child_process';
 import * as zlib from 'zlib';
@@ -2067,6 +2068,240 @@ async function run() {
     console.log(
       'Verified cloze grade in history with the bracket-flattened label.',
     );
+
+    // STEP 13: Data-pack import + nested multi-select practice. A pack JSON
+    // is installed through the settings' REAL file picker (uploadFile on the
+    // hidden input); the practice modal must then nest the pack's banks
+    // under the pack name, the group checkbox must select them together,
+    // and "Practice selected" must open the union in ONE view that
+    // schedules across both banks.
+    console.log('STEP 13: Installing a data pack and practicing it whole...');
+    fs.writeFileSync(
+      path.join(vaultPath, 'french-cards.md'),
+      'bonjour\thello\t\t\t1\tFrench\n',
+    );
+    fs.writeFileSync(
+      path.join(vaultPath, 'spanish-cards.md'),
+      'hola\thello\t\t\t1\tSpanish\n',
+    );
+    const packTmpPath = path.join(os.tmpdir(), 'euro-pack.json');
+    fs.writeFileSync(
+      packTmpPath,
+      JSON.stringify(
+        {
+          version: 1,
+          name: 'Euro Pack',
+          banks: [
+            {name: 'French', filePath: 'french-cards.md'},
+            {name: 'Spanish', filePath: 'spanish-cards.md'},
+          ],
+        },
+        null,
+        2,
+      ),
+    );
+    await page.evaluate(() => {
+      (window as any).app.setting.open();
+      setTimeout(
+        () => (window as any).app.setting.openTabById('hanzi-practice'),
+        200,
+      );
+    });
+    await page.waitForSelector('.hanzi-pack-file-input', {timeout: 10000});
+    const packInput = await page.$('.hanzi-pack-file-input');
+    if (!packInput) throw new Error('Data pack file input not found');
+    await packInput.uploadFile(packTmpPath);
+    await page.waitForSelector('.hanzi-pack-row-setting', {timeout: 10000});
+    // Only the pack's PATH is registered — the JSON was copied into the
+    // vault and the banks resolve from it (so a later JSON update applies).
+    const packState = await page.evaluate(() => {
+      const plugin = (window as any).app.plugins.plugins['hanzi-practice'];
+      return plugin.settings.dataPacks;
+    });
+    if (
+      JSON.stringify(packState) !==
+      JSON.stringify([{filePath: 'euro-pack.json'}])
+    ) {
+      throw new Error(
+        `Data pack not registered by path: ${JSON.stringify(packState)}`,
+      );
+    }
+    if (!fs.existsSync(path.join(vaultPath, 'euro-pack.json'))) {
+      throw new Error('Imported pack JSON was not copied into the vault');
+    }
+    console.log('Verified pack copied into the vault and registered by path.');
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    // Pin the settings scroll so the shot is position-deterministic (the
+    // Data Packs section sits below the fold at the mobile viewport size).
+    await page.evaluate(() => {
+      document
+        .querySelector('.hanzi-pack-row-setting')
+        ?.scrollIntoView({block: 'center'});
+    });
+    await delay(300);
+    await takeAndCompareScreenshot(page, 'step13-pack-registered');
+    await page.keyboard.press('Escape');
+    await delay(500);
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+
+    console.log('STEP 13b: Practice modal must nest the pack banks...');
+    const packPracticeOpened = await page.evaluate(() => {
+      return (window as any).app.commands.executeCommandById(
+        'hanzi-practice:practice',
+      );
+    });
+    if (!packPracticeOpened) {
+      throw new Error('Command hanzi-practice:practice failed (step 13b)');
+    }
+    await page.waitForSelector('.practice-pack-group', {timeout: 10000});
+    const nested = await page.evaluate(() => {
+      const group = document.querySelector('.practice-pack-group')!;
+      return {
+        packName: group.querySelector('.practice-pack-name')?.textContent,
+        packBanks: Array.from(
+          group.querySelectorAll('.practice-bank-name'),
+        ).map(el => el.textContent),
+        topLevel: Array.from(
+          document.querySelectorAll(
+            '.practice-bank-list > .practice-bank-row .practice-bank-name',
+          ),
+        ).map(el => el.textContent),
+      };
+    });
+    if (
+      nested.packName !== 'Euro Pack' ||
+      JSON.stringify(nested.packBanks) !==
+        JSON.stringify(['French', 'Spanish']) ||
+      nested.topLevel.includes('French') ||
+      nested.topLevel.includes('Spanish')
+    ) {
+      throw new Error(
+        `Pack banks not nested under the pack: ${JSON.stringify(nested)}`,
+      );
+    }
+    console.log('Verified French + Spanish nest under "Euro Pack".');
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step13-practice-nested');
+
+    // The group checkbox selects the whole pack in one click.
+    await page.click('.practice-pack-check');
+    const selection = await page.evaluate(() => {
+      const btn = document.querySelector(
+        '.practice-selected',
+      ) as HTMLButtonElement;
+      return {
+        checks: Array.from(
+          document.querySelectorAll(
+            '.practice-pack-group .practice-bank-check',
+          ),
+        ).map(el => (el as HTMLInputElement).checked),
+        btnText: btn.textContent,
+        btnDisabled: btn.disabled,
+      };
+    });
+    if (
+      JSON.stringify(selection.checks) !== JSON.stringify([true, true]) ||
+      selection.btnText !== 'Practice selected (2)' ||
+      selection.btnDisabled
+    ) {
+      throw new Error(
+        `Pack checkbox did not select the pack: ${JSON.stringify(selection)}`,
+      );
+    }
+    console.log('Verified the pack checkbox selects both banks.');
+    await takeAndCompareScreenshot(page, 'step13-pack-selected');
+
+    console.log('STEP 13c: Practicing the selected pack as one pool...');
+    await page.click('.practice-selected');
+    // The practice leaf is ALREADY open on the German bank (step 12), so a
+    // bare .flash-card wait would match the STALE view — wait for the
+    // multi-bank render itself (header + the French card) instead.
+    await page.waitForFunction(
+      () => {
+        const leaf = (window as any).app.workspace.getLeavesOfType(
+          'hanzi-practice-view',
+        )[0];
+        return (
+          leaf?.view.containerEl.querySelector('h2')?.textContent ===
+            'Practice: French + Spanish' &&
+          leaf?.view.containerEl.querySelector('.flash-card-front')
+            ?.textContent === 'bonjour'
+        );
+      },
+      {timeout: 10000},
+    );
+    const multi = await page.evaluate(() => {
+      const leaf = (window as any).app.workspace.getLeavesOfType(
+        'hanzi-practice-view',
+      )[0];
+      return {
+        state: leaf.view.getState(),
+        header: leaf.view.containerEl.querySelector('h2')?.textContent,
+        front:
+          leaf.view.containerEl.querySelector('.flash-card-front')?.textContent,
+      };
+    });
+    if (
+      JSON.stringify(multi.state) !==
+      JSON.stringify({banks: ['French', 'Spanish']})
+    ) {
+      throw new Error(`Multi-bank state wrong: ${JSON.stringify(multi)}`);
+    }
+    if (
+      multi.header !== 'Practice: French + Spanish' ||
+      multi.front !== 'bonjour'
+    ) {
+      throw new Error(`Multi-bank practice wrong: ${JSON.stringify(multi)}`);
+    }
+    console.log('Verified one view practices "French + Spanish".');
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step13-multi-bank-practice');
+
+    // Grading the French card must surface the SPANISH one next — the
+    // union schedules across both banks as one pool.
+    await page.evaluate(() => {
+      (document.querySelector('.flash-card-flip') as HTMLElement).click();
+    });
+    await page.evaluate(() => {
+      const veryEasy = Array.from(
+        document.querySelectorAll('.flash-card-grade'),
+      ).find(b => (b as HTMLElement).dataset.score === '5');
+      (veryEasy as HTMLElement | undefined)?.click();
+    });
+    let unionAdvanced = false;
+    for (let i = 0; i < 20; i++) {
+      const front = await page.evaluate(() => {
+        return document.querySelector('.flash-card-front')?.textContent;
+      });
+      if (front === 'hola') {
+        unionAdvanced = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!unionAdvanced) {
+      throw new Error(
+        'Grading the French card did not advance to the Spanish one',
+      );
+    }
+    console.log('Verified the union advances across banks after grading.');
+    await dump(page, 'step13-union-advanced');
 
     log('E2E steps complete!');
     log('Closing Obsidian...');

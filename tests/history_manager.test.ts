@@ -272,6 +272,52 @@ describe('HistoryManager', () => {
     expect(unknownBank).toBeNull();
   });
 
+  it('getNextDueEntry practices several banks as one union pool', async () => {
+    const capital = flashcard('Capitals', 'France', 'Paris');
+    const german = flashcard(
+      'German',
+      'dog',
+      'Hund',
+      CardType.REVERSIBLE_FLASHCARD,
+    );
+    const sources = [
+      {name: 'Capitals', filePath: 'capitals.md'},
+      {name: 'German', filePath: 'german.md'},
+    ];
+    const files: Record<string, string> = {
+      'capitals.md': `France\tParis\t\t${capital.id}\t1\tCapitals`,
+      'german.md': `dog\tHund\t\t${german.id}\t2\tGerman`,
+      // The Capitals card is years overdue; the German card was reviewed
+      // much more recently — the union must schedule across both banks and
+      // pick the most overdue card regardless of its bank.
+      'history.md':
+        `- [1618712000000] ${capital.id} France (Paris): 3\n` +
+        `- [1718798400000] ${german.id} dog (Hund): 5\n`,
+    };
+    (FileUtil.fetchFile as jest.Mock).mockImplementation(
+      (_app: App, path: string) =>
+        Promise.resolve(Ok(new TextEncoder().encode(files[path] ?? ''))),
+    );
+
+    const next = await HistoryManager.getNextDueEntry(
+      mockApp,
+      'history.md',
+      sources,
+      ['Capitals', 'German'],
+    );
+    expect(next).toEqual(capital);
+
+    // A single-element array behaves exactly like the plain-string form —
+    // banks outside the selection never leak in.
+    const onlyGerman = await HistoryManager.getNextDueEntry(
+      mockApp,
+      'history.md',
+      sources,
+      ['German'],
+    );
+    expect(onlyGerman).toEqual(german);
+  });
+
   it('legacy bank-tagged lines in the Hanzi file stay practicable', async () => {
     // Before per-bank files, every bank's cards lived in the Hanzi words
     // file with a bank tag on the line. Those lines keep their tag.

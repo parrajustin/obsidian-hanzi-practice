@@ -91,9 +91,25 @@ export interface DataPackError {
   error: StatusError;
 }
 
+/**
+ * One loaded pack's contribution, for UIs that group banks by pack (the
+ * practice modal nests a pack's banks under its name so they can be selected
+ * together). A bank name contributed by several packs belongs to the LAST
+ * one — matching the merge order, where the last pack's file path wins.
+ */
+export interface PackGroup {
+  /** Display name: the pack JSON's `name`, falling back to its file path. */
+  name: string;
+  filePath: string;
+  /** The bank names this pack contributes (never the built-in Hanzi). */
+  bankNames: string[];
+}
+
 export interface ResolvedBankSources {
   /** The Hanzi bank first, then manual banks, then each pack's banks. */
   sources: BankSource[];
+  /** Per-pack grouping of the bank names each loaded pack contributed. */
+  packGroups: PackGroup[];
   /** Registered packs that failed to load — their banks are absent. */
   packErrors: DataPackError[];
 }
@@ -115,6 +131,7 @@ export async function resolveBankSources(
     filePath: b.filePath,
   }));
   const packErrors: DataPackError[] = [];
+  const packGroups: PackGroup[] = [];
   for (const pack of settings.dataPacks) {
     const packResult = await loadDataPack(app, pack.filePath);
     if (!packResult.ok) {
@@ -124,12 +141,36 @@ export async function resolveBankSources(
       continue;
     }
     banks = mergeDataPackBanks(banks, packResult.val).banks;
+    packGroups.push({
+      name: packResult.val.name ?? pack.filePath,
+      filePath: pack.filePath,
+      bankNames: [
+        ...new Set(
+          packResult.val.banks
+            .map(b => b.name)
+            .filter(name => name !== HANZI_BANK),
+        ),
+      ],
+    });
   }
+  // A bank name contributed by several packs is owned by the LAST of them
+  // (the merge above gave it that pack's file path); drop emptied groups.
+  const owner = new Map<string, number>();
+  packGroups.forEach((group, i) =>
+    group.bankNames.forEach(name => owner.set(name, i)),
+  );
+  const dedupedGroups = packGroups
+    .map((group, i) => ({
+      ...group,
+      bankNames: group.bankNames.filter(name => owner.get(name) === i),
+    }))
+    .filter(group => group.bankNames.length > 0);
   return {
     sources: [
       {name: HANZI_BANK, filePath: settings.practiceFilePath},
       ...banks,
     ],
+    packGroups: dedupedGroups,
     packErrors,
   };
 }

@@ -301,6 +301,44 @@ describe('HanziPracticeView', () => {
     );
   });
 
+  it('practices several banks as one pool (multi-select state)', async () => {
+    nextDue = jest
+      .spyOn(HistoryManager, 'getNextDueEntry')
+      .mockResolvedValue(FLASH);
+    appendResult = jest
+      .spyOn(HistoryManager, 'appendResult')
+      .mockResolvedValue(undefined);
+    makeView();
+    await view.setState({banks: ['Capitals', 'German']}, {} as never);
+    await view.onOpen();
+
+    expect(view.getDisplayText()).toBe('Practice: Capitals + German');
+    // Multi-bank state persists as {banks}; single keeps the legacy {bank}.
+    expect(view.getState()).toEqual({banks: ['Capitals', 'German']});
+    expect(nextDue).toHaveBeenCalledWith(
+      expect.anything(),
+      'history.md',
+      expect.anything(),
+      ['Capitals', 'German'],
+    );
+    // The bank header names every practiced bank.
+    expect(content().querySelector('h2')?.textContent).toBe(
+      'Practice: Capitals + German',
+    );
+  });
+
+  it('shows the multi-bank empty message when the union has no cards', async () => {
+    nextDue = jest
+      .spyOn(HistoryManager, 'getNextDueEntry')
+      .mockResolvedValue(null);
+    makeView();
+    await view.setState({banks: ['Capitals', 'German']}, {} as never);
+    await view.onOpen();
+    expect(content().querySelector('.practice-empty')?.textContent).toBe(
+      'No cards in the selected banks (Capitals + German) yet.',
+    );
+  });
+
   it('renders the hanzi UI from cached fields when stroke data is missing', async () => {
     await openWith(HANZI);
     expect(view.getDisplayText()).toBe('Hanzi Practice');

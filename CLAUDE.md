@@ -42,14 +42,17 @@ hotkeys/history.
 - `src/main.ts` — plugin entry. Registers the `HanziPracticeView` + five commands
   (`open-hanzi-practice`, `practice` (choose-bank modal), `add-hanzi-character`,
   `add-flash-card`, `edit-hanzi-bank` — the last id kept for hotkey compat, it now edits ALL
-  banks). `activateView(bank)` opens the practice tab in the
+  banks). `activateView(banks: string | string[])` opens the practice tab in the
   **center** pane via `workspace.getLeaf('tab')` (reusing an existing practice leaf if
-  present) and ALWAYS calls `setViewState` with `state: {bank}` so an open tab switches bank.
+  present) and ALWAYS calls `setViewState` (`state: {bank}` for one bank, `{banks}` for a
+  multi-select) so an open tab switches bank(s).
   `getDictionary()` lazily loads + **caches** the parsed CEDICT for the plugin lifetime; only the
   add-character modal uses it. `CEDICT_FILE` names the shipped gzip.
 - `src/views/hanzi_view.ts` — the `HanziPracticeView` (ItemView). One view instance practices
-  ONE bank (`bank` is view state via `setState`/`getState`, default `Hanzi`, so it persists in
-  the workspace layout) and renders whatever UI the due card's type needs: flashcards get a
+  one OR SEVERAL banks as a single pool (`banks: string[]` is view state via
+  `setState`/`getState`, default `[Hanzi]`; single-bank state keeps the historical `{bank}`
+  shape so old workspace layouts restore, multi-bank persists as `{banks}`; headers and the
+  tab title label them `Practice: A + B`) and renders whatever UI the due card's type needs: flashcards get a
   `FlashCard`, multiple-choice cards a `MultiChoiceCard` (auto-grade mapping lives in
   `renderMultiChoice`), cloze cards a `ClozeCard`, true/false cards the `MultiChoiceCard`
   reuse (`renderTrueFalse`) — all funnel into `gradeCard` (appends history, then advances —
@@ -152,10 +155,20 @@ hotkeys/history.
   bank, so the same text may live in two banks); duplicate or validation error → inline
   `.flash-add-error` + `Notice`. Stays open after a successful add (text fields clear;
   bank + type + toggle stick) for batch entry.
-- `src/commands/practice_bank_modal.ts` — `practice` command's modal: one
-  `.practice-bank-option` button per bank (name + card count) — every configured bank shows
-  even with 0 cards, `Hanzi` listed first, plus any legacy bank tags found in files; picking
-  one calls `plugin.activateView(bank)`.
+- `src/commands/practice_bank_modal.ts` — `practice` command's modal: one row
+  (`.practice-bank-row`) per bank = a checkbox (`.practice-bank-check`, `data-bank` attr) +
+  the `.practice-bank-option` button (name + card count) — every configured bank shows even
+  with 0 cards, `Hanzi` listed first, plus any legacy bank tags found in files. Clicking a
+  bank button practices it alone (`plugin.activateView(bank)` — the historical quick path);
+  checking boxes instead enables the footer `.practice-selected` button
+  ("Practice selected (N)", disabled at 0) which opens ALL checked banks as one view
+  (`activateView(string[])`). **Banks contributed by a data pack nest** under a
+  `.practice-pack-group` (header `.practice-pack-header`: group checkbox
+  `.practice-pack-check` + `.practice-pack-name` from the pack JSON's `name`), and the group
+  checkbox (un)checks the whole pack — it mirrors its children (checked exactly when every
+  pack bank is). Grouping comes from `resolveBankSources`' `packGroups` (a bank name in
+  several packs belongs to the LAST one, matching merge order); manual banks + legacy tags
+  stay top-level.
 - `src/components/flash_card.ts` — `FlashCard`: `.flash-card` (front, hidden back) +
   `.flash-card-flip` "Show Answer" button; flipping reveals the back and swaps in
   `.flash-card-grades` (one `.flash-card-grade` button per `FLASHCARD_GRADES` entry,
@@ -211,8 +224,10 @@ hotkeys/history.
   banks' files (`loadAllPracticeEntries(app, sources)` — **the file a card lives in decides
   its bank**, except lines in the Hanzi file which keep their line-level bank tag: that file
   held every bank's cards before per-bank files existed), and picks the next due entry **per
-  bank** (`getNextDueEntry(app, historyPath, sources, bank)` — senses of the same char
-  schedule independently; `getMixUpEntry` is hanzi-only and stays in the current bank).
+  bank selection** (`getNextDueEntry(app, historyPath, sources, banks)` — `banks` is one name
+  or an array practiced as one union pool, most-overdue first regardless of bank; senses of
+  the same char schedule independently; `getMixUpEntry` is hanzi-only and stays in the
+  current bank).
 - `src/spaced_repetition.ts` — SR scheduling (see below).
 - `src/settings.ts` — Zod-schema settings, now **v2** (SchemaManager migrations: v0→v1 adds
   `banks: []`, v1→v2 adds `dataPacks: []`): `historyFilePath`, `practiceFilePath` (the Hanzi
@@ -361,7 +376,7 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
    `jest.config.js` are ignored. `npm run lint:fix` / `npm run format` to auto-fix — but beware:
    `eslint . --fix` on *unformatted* code once produced broken output from overlapping fixes;
    run `npm run format` (plain prettier) first, then `lint:fix`.
-3. `test:unit` — `npx jest`: 258 tests across 22 suites — the data layer
+3. `test:unit` — `npx jest`: 267 tests across 22 suites — the data layer
    (`practice_list` / `card_markdown_roundtrip` (per-card-type markdown save/load round-trips
    pinning the CARD_FORMATS.md format) / `data_pack` (pack JSON parse + bank merge) /
    `example_data_packs` (loads the shipped `examples/data-packs/*.json` + linked card files
@@ -504,6 +519,18 @@ Then re-run `npm run test:e2e:docker` and confirm every `[visual]` line reports 
    `<id> 我一个星期[没]吃饭。 (I haven't eaten for a week.): 3` (the label flattens
    `{{…}}` to `[…]`). Goldens `step12-add-cloze` / `step12-cloze-prompt` /
    `step12-cloze-revealed` (fully deterministic — nothing shuffles).
+13. Data pack + nested multi-select practice: the runner writes `french-cards.md` /
+   `spanish-cards.md` into the vault and a "Euro Pack" JSON to the OS temp dir, then installs
+   it through the settings' REAL file picker (`uploadFile` on the hidden
+   `.hanzi-pack-file-input`) — asserts `settings.dataPacks == [{filePath: 'euro-pack.json'}]`
+   and that the JSON was copied into the vault (golden `step13-pack-registered`). The
+   `practice` modal must nest French + Spanish under `.practice-pack-group` "Euro Pack"
+   (NOT top-level; golden `step13-practice-nested`); clicking `.practice-pack-check` checks
+   both bank boxes and enables "Practice selected (2)" (golden `step13-pack-selected`);
+   clicking `.practice-selected` opens ONE view with state `{banks: ['French','Spanish']}`,
+   header `Practice: French + Spanish`, showing `bonjour` (French file listed first → first
+   due; golden `step13-multi-bank-practice`); grading it Very Easy must surface `hola` —
+   the union schedules across both banks as one pool (dump only).
 
 ### Validate a run
 - **Exit code 0** and the log's last line is `RESULT: PASS`:

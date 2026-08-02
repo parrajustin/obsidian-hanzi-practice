@@ -167,6 +167,13 @@ is updated later (synced from another device, hand-edited, or replaced by a
 newer pack version), the plugin picks up the changes on its next start
 automatically.
 
+In the `practice` command's bank picker, a pack's banks appear **nested
+under the pack's name** with a group checkbox — one click selects the whole
+pack. Any combination of banks (pack or manual) can also be checked
+individually and practiced together via *Practice selected*; the union
+schedules as one pool, so the most overdue card comes first regardless of
+which bank it belongs to.
+
 Ready-to-import examples (one per card type plus a combined starter pack,
 kept valid by the test suite) live in
 [examples/data-packs/](examples/data-packs/).
