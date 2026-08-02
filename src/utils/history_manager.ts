@@ -5,6 +5,13 @@ import {
 } from 'standard-obsidian-lib/src/filesystem/file_util';
 import {SpacedRepetition, Review} from '../spaced_repetition';
 import {
+  LogError,
+  LogErrorAsWarning,
+  SetSpanAttribute,
+  SetSpanAttributes,
+  Span,
+} from '../telemetry/telemetry';
+import {
   BankSource,
   CardType,
   entryLabel,
@@ -57,20 +64,30 @@ function isPracticable(entry: PracticeEntry): boolean {
 
 export class HistoryManager {
   /** Load and parse the practice list into structured entries. */
+  @Span()
   static async loadPracticeEntries(
     app: App,
     practiceFilePath: string,
   ): Promise<PracticeEntry[]> {
+    SetSpanAttribute('file.path', practiceFilePath);
     const practiceResult = await FileUtil.fetchFile(
       app,
       practiceFilePath,
       FileSystemType.OBSIDIAN,
     );
     if (!practiceResult.ok) {
+      // A missing bank file is normal (an empty bank), so this is a
+      // warning-level signal, not an error — but it still travels with the
+      // full StatusError payload.
+      LogErrorAsWarning('Practice file could not be read', practiceResult.val, {
+        practiceFilePath,
+      });
       return [];
     }
     const text = new TextDecoder('utf-8').decode(practiceResult.val);
-    return parsePracticeList(text);
+    const entries = parsePracticeList(text);
+    SetSpanAttribute('practice.entries', entries.length);
+    return entries;
   }
 
   /**
@@ -96,12 +113,14 @@ export class HistoryManager {
     return all;
   }
 
+  @Span()
   static async appendResult(
     app: App,
     historyFilePath: string,
     entry: PracticeEntry,
     score: number,
   ): Promise<void> {
+    SetSpanAttributes({'card.id': entry.id, 'card.score': score});
     const timestamp = Date.now();
     const line = `\n- [${timestamp}] ${entry.id} ${entryLabel(entry)}: ${score}`;
 
@@ -120,12 +139,21 @@ export class HistoryManager {
     const newText = text + line;
 
     const encoder = new TextEncoder();
-    await FileUtil.writeToFile(
+    const written = await FileUtil.writeToFile(
       app,
       historyFilePath,
       encoder.encode(newText),
       FileSystemType.OBSIDIAN,
     );
+    // A failed write silently loses the user's practice result, which is
+    // exactly the kind of invisible failure a bug report needs to carry.
+    if (written.err) {
+      LogError('Failed to append practice result to history', written.val, {
+        historyFilePath,
+        entryId: entry.id,
+        score,
+      });
+    }
   }
 
   /**
@@ -247,6 +275,7 @@ export class HistoryManager {
    * The next card due for review in one bank: the most overdue due card, or
    * (when nothing is strictly due) the card with the earliest due date.
    */
+  @Span()
   static async getNextDueEntry(
     app: App,
     historyFilePath: string,
@@ -256,6 +285,7 @@ export class HistoryManager {
     // One bank or several practiced together — the union schedules as one
     // pool (most-overdue card first, regardless of which bank it is in).
     const bankSet = new Set(typeof banks === 'string' ? [banks] : banks);
+    SetSpanAttribute('practice.banks', [...bankSet].join(','));
     const allEntries = await this.loadAllPracticeEntries(app, sources);
     const entries = allEntries.filter(
       e => bankSet.has(e.bank) && isPracticable(e),

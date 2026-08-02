@@ -22,6 +22,8 @@
     "test:component:docker:goldens": "E2E_REGEN_GOLDENS=1 bash docker/build-and-run.sh node tests/component_runner.js"
   },
   "dependencies": {
+    "@opentelemetry/api": "^1.9.1",
+    "obsidian-bug-collector": "file:../obsidian-bug-collector",
     "standard-obsidian-lib": "file:../standard-obsidian-lib",
     "standard-ts-lib": "file:../standard-ts-lib",
     "zod": "^3.22.4"

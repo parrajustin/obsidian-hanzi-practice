@@ -1,4 +1,4 @@
-import {Plugin, WorkspaceLeaf} from 'obsidian';
+import {apiVersion, Plugin, WorkspaceLeaf} from 'obsidian';
 import {
   HanziPluginSettings,
   HanziSettingTab,
@@ -15,6 +15,22 @@ import {StrokeDataReader} from './data/stroke_codec';
 import {loadStrokeData} from './data/stroke_data';
 import {Ok, Result} from 'standard-ts-lib/src/result';
 import {StatusError} from 'standard-ts-lib/src/status_error';
+import {
+  GetTelemetry,
+  InitTelemetry,
+  LogError,
+  LogInfo,
+  ResetTelemetry,
+  SetSpanAttribute,
+  Span,
+} from './telemetry/telemetry';
+import {
+  ObserveCardsToday,
+  RecordCardsPerDay,
+  ResetMetrics,
+} from './telemetry/metrics';
+import {countReviewsByDay, dayKeyFor} from './telemetry/practice_volume';
+import {HistoryManager} from './utils/history_manager';
 
 export const HANZI_VIEW_TYPE = 'hanzi-practice-view';
 
@@ -33,37 +49,74 @@ export default class HanziPracticePlugin extends Plugin {
   settings!: HanziPluginSettings;
   private dictionary: CedictParser | null = null;
   private strokeData: StrokeDataReader | null = null;
+  /** Reviews per local day, refreshed from history; drives the volume metrics. */
+  private reviewCountsByDay = new Map<string, number>();
 
   /**
    * Lazily load + parse the CEDICT dictionary, caching it for the plugin's
    * lifetime so repeated "add character" actions don't re-parse ~10MB each time.
    */
+  @Span()
   async getDictionary(): Promise<Result<CedictParser, StatusError>> {
     if (this.dictionary) return Ok(this.dictionary);
     const parser = new CedictParser();
     const dictPath = this.manifest.dir
       ? `${this.manifest.dir}/${CEDICT_FILE}`
       : CEDICT_FILE;
+    SetSpanAttribute('dictionary.path', dictPath);
+    const started = Date.now();
     const res = await parser.loadDictionary(this.app, dictPath);
-    if (!res.ok) return res as unknown as Result<CedictParser, StatusError>;
+    if (!res.ok) {
+      LogError('Failed to load CEDICT dictionary', res.val, {dictPath});
+      return res as unknown as Result<CedictParser, StatusError>;
+    }
     this.dictionary = parser;
+    LogInfo('CEDICT dictionary loaded', {
+      dictPath,
+      durationMs: Date.now() - started,
+    });
     return Ok(parser);
   }
 
   /** Lazily load the stroke database, cached for the plugin's lifetime. */
+  @Span()
   async getStrokeData(): Promise<Result<StrokeDataReader, StatusError>> {
     if (this.strokeData) return Ok(this.strokeData);
     const dataPath = this.manifest.dir
       ? `${this.manifest.dir}/${STROKES_FILE}`
       : STROKES_FILE;
+    SetSpanAttribute('strokes.path', dataPath);
+    const started = Date.now();
     const res = await loadStrokeData(this.app, dataPath);
-    if (!res.ok) return res;
+    if (!res.ok) {
+      LogError('Failed to load stroke database', res.val, {dataPath});
+      return res;
+    }
     this.strokeData = res.val;
+    LogInfo('Stroke database loaded', {
+      dataPath,
+      durationMs: Date.now() - started,
+    });
     return Ok(this.strokeData);
   }
 
   async onload() {
+    // FIRST: telemetry, so everything below (including settings failures) is
+    // reported. InitTelemetry never throws — with no Bug Collector installed
+    // it logs one console error and every helper degrades to a no-op.
+    const telemetry = InitTelemetry(this.manifest.version, {
+      'obsidian.version': apiVersion,
+      'plugin.name': this.manifest.name,
+    });
+    if (telemetry.some) {
+      // Opens this run's session group: every record below is attributed to
+      // it, and it is what the bug-report dropdown offers.
+      telemetry.safeValue().start();
+    }
+    LogInfo('Plugin loading', {version: this.manifest.version});
+
     await this.loadSettings();
+    this.reportDailyPracticeVolume();
 
     this.addSettingTab(
       new HanziSettingTab(this.app, this, this.settings, async settings => {
@@ -122,6 +175,34 @@ export default class HanziPracticePlugin extends Plugin {
         new EditBankModal(this.app, this).open();
       },
     });
+
+    LogInfo('Plugin loaded', {
+      banks: this.settings.banks.length,
+      dataPacks: this.settings.dataPacks.length,
+    });
+  }
+
+  /**
+   * Practice-volume metrics. Two instruments, because they answer different
+   * questions: an observable gauge re-reads TODAY's count on every metric
+   * collection (a live number that keeps changing), while the histogram takes
+   * exactly one observation of YESTERDAY — a completed day, so the value is
+   * final and each day contributes one sample.
+   */
+  private reportDailyPracticeVolume(): void {
+    ObserveCardsToday(() => this.reviewCountsByDay.get(dayKeyFor(0)) ?? 0);
+    void this.refreshReviewCounts().then(() => {
+      RecordCardsPerDay(this.reviewCountsByDay.get(dayKeyFor(-1)) ?? 0);
+    });
+  }
+
+  /** Re-read the history file into the per-day review counts. */
+  async refreshReviewCounts(): Promise<void> {
+    const history = await HistoryManager.parseHistory(
+      this.app,
+      this.settings.historyFilePath,
+    );
+    this.reviewCountsByDay = countReviewsByDay(history);
   }
 
   async activateView(banks: string | string[] = HANZI_BANK) {
@@ -150,6 +231,13 @@ export default class HanziPracticePlugin extends Plugin {
   }
 
   onunload() {
+    LogInfo('Plugin unloading');
+    const telemetry = GetTelemetry();
+    // Close this run's session group so the collector never keeps a ghost
+    // group open for a plugin that is gone.
+    if (telemetry.some) telemetry.safeValue().end();
+    ResetMetrics();
+    ResetTelemetry();
     this.app.workspace.detachLeavesOfType(HANZI_VIEW_TYPE);
   }
 
@@ -159,7 +247,9 @@ export default class HanziPracticePlugin extends Plugin {
     if (result.ok) {
       this.settings = result.val;
     } else {
-      console.error('Failed to parse settings, using default', result.val);
+      // Telemetry is the logging path now; the console is only the failsafe
+      // inside LogError when no collector is reachable.
+      LogError('Failed to parse settings, using defaults', result.val);
       const defRes = SETTINGS_SCHEMA.getDefault();
       this.settings = defRes.ok
         ? defRes.val

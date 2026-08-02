@@ -78,6 +78,8 @@ describe('HanziPracticeView', () => {
       getStrokeData: jest
         .fn()
         .mockResolvedValue(Err(NotFoundError('no stroke db in tests'))),
+      // Telemetry bookkeeping the view kicks off after each grade.
+      refreshReviewCounts: jest.fn().mockResolvedValue(undefined),
     } as never;
     view = new HanziPracticeView(new WorkspaceLeaf() as never, plugin);
     return view;

@@ -14,6 +14,7 @@ import {
   parseDataPack,
 } from './utils/data_pack';
 import {BankSource, HANZI_BANK} from './utils/practice_list';
+import {LogError} from './telemetry/telemetry';
 import {HistoryManager} from './utils/history_manager';
 
 const v0Schema = z.object({
@@ -137,6 +138,9 @@ export async function resolveBankSources(
     if (!packResult.ok) {
       // A broken/missing pack contributes no banks but must not take the
       // rest of the plugin down; the error surfaces via packErrors.
+      LogError('Data pack could not be loaded', packResult.val, {
+        filePath: pack.filePath,
+      });
       packErrors.push({filePath: pack.filePath, error: packResult.val});
       continue;
     }
@@ -363,6 +367,13 @@ export class HanziSettingTab extends PluginSettingTab {
       /*textForUnknown=*/ 'Failed to read data pack file',
     );
     if (!text.ok) {
+      LogError(
+        'Data pack import failed: could not read picked file',
+        text.val,
+        {
+          fileName: file.name,
+        },
+      );
       new Notice(`Data pack import failed: ${text.val.message}`);
       return;
     }
@@ -378,6 +389,9 @@ export class HanziSettingTab extends PluginSettingTab {
   async installDataPack(fileName: string, text: string): Promise<void> {
     const pack = parseDataPack(text);
     if (!pack.ok) {
+      LogError('Data pack import failed: invalid pack JSON', pack.val, {
+        fileName,
+      });
       new Notice(`Data pack import failed: ${pack.val.message}`);
       return;
     }
@@ -389,6 +403,13 @@ export class HanziSettingTab extends PluginSettingTab {
       FileSystemType.OBSIDIAN,
     );
     if (!write.ok) {
+      LogError(
+        'Data pack import failed: could not write pack into vault',
+        write.val,
+        {
+          filePath,
+        },
+      );
       new Notice(`Data pack import failed: ${write.val.message}`);
       return;
     }
