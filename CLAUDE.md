@@ -157,12 +157,15 @@ hotkeys/history.
   bank + type + toggle stick) for batch entry.
 - `src/commands/practice_bank_modal.ts` — `practice` command's modal: one row
   (`.practice-bank-row`) per bank = a checkbox (`.practice-bank-check`, `data-bank` attr) +
-  the `.practice-bank-option` button (name + card count) — every configured bank shows even
+  the `.practice-bank-option` button (name + card count + `.practice-bank-score` "avg N.N" =
+  mean over the bank's cards of each card's average review score, an unpracticed card
+  counting 0) — every configured bank shows even
   with 0 cards, `Hanzi` listed first, plus any legacy bank tags found in files. Clicking a
   bank button practices it alone (`plugin.activateView(bank)` — the historical quick path);
   checking boxes instead enables the footer `.practice-selected` button
   ("Practice selected (N)", disabled at 0) which opens ALL checked banks as one view
-  (`activateView(string[])`). **Banks contributed by a data pack nest** under a
+  (`activateView(string[])`), with a live `.practice-selected-score` line ("Average score:
+  N.N", card-weighted over every card in the checked banks, hidden at 0 selected). **Banks contributed by a data pack nest** under a
   `.practice-pack-group` (header `.practice-pack-header`: group checkbox
   `.practice-pack-check` + `.practice-pack-name` from the pack JSON's `name`), and the group
   checkbox (un)checks the whole pack — it mirrors its children (checked exactly when every
@@ -225,7 +228,11 @@ hotkeys/history.
   its bank**, except lines in the Hanzi file which keep their line-level bank tag: that file
   held every bank's cards before per-bank files existed), and picks the next due entry **per
   bank selection** (`getNextDueEntry(app, historyPath, sources, banks)` — `banks` is one name
-  or an array practiced as one union pool, most-overdue first regardless of bank; senses of
+  or an array practiced as one union pool, most-overdue first regardless of bank; the
+  candidate pool is **Fisher-Yates shuffled before the scan**, so ties — e.g. a batch of
+  brand-new cards, all equally due — surface in a different order every pick instead of
+  always the same first-in-file card (tests/E2E pin `Math.random` to ~1, which makes the
+  shuffle the identity permutation = historical file order); senses of
   the same char schedule independently; `getMixUpEntry` is hanzi-only and stays in the
   current bank).
 - `src/spaced_repetition.ts` — SR scheduling (see below).
@@ -376,7 +383,7 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
    `jest.config.js` are ignored. `npm run lint:fix` / `npm run format` to auto-fix — but beware:
    `eslint . --fix` on *unformatted* code once produced broken output from overlapping fixes;
    run `npm run format` (plain prettier) first, then `lint:fix`.
-3. `test:unit` — `npx jest`: 267 tests across 22 suites — the data layer
+3. `test:unit` — `npx jest`: 270 tests across 22 suites — the data layer
    (`practice_list` / `card_markdown_roundtrip` (per-card-type markdown save/load round-trips
    pinning the CARD_FORMATS.md format) / `data_pack` (pack JSON parse + bank merge) /
    `example_data_packs` (loads the shipped `examples/data-packs/*.json` + linked card files
@@ -525,8 +532,10 @@ Then re-run `npm run test:e2e:docker` and confirm every `[visual]` line reports 
    `.hanzi-pack-file-input`) — asserts `settings.dataPacks == [{filePath: 'euro-pack.json'}]`
    and that the JSON was copied into the vault (golden `step13-pack-registered`). The
    `practice` modal must nest French + Spanish under `.practice-pack-group` "Euro Pack"
-   (NOT top-level; golden `step13-practice-nested`); clicking `.practice-pack-check` checks
-   both bank boxes and enables "Practice selected (2)" (golden `step13-pack-selected`);
+   (NOT top-level, both rows showing `avg 0.0` — brand-new cards score 0; golden
+   `step13-practice-nested`); clicking `.practice-pack-check` checks
+   both bank boxes and enables "Practice selected (2)" with the live "Average score: 0.0"
+   line (golden `step13-pack-selected`);
    clicking `.practice-selected` opens ONE view with state `{banks: ['French','Spanish']}`,
    header `Practice: French + Spanish`, showing `bonjour` (French file listed first → first
    due; golden `step13-multi-bank-practice`); grading it Very Easy must surface `hola` —

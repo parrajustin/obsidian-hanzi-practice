@@ -249,4 +249,57 @@ describe('PracticeBankModal', () => {
     selectedBtn().dispatchEvent(new MouseEvent('click'));
     expect(activateView).toHaveBeenCalledWith(['Capitals', 'Spanish']);
   });
+
+  it('every bank row shows its average score (unpracticed cards count 0)', async () => {
+    // France was reviewed twice (both 4 → card average 4); every other card
+    // has no history and scores 0. Capitals = (4 + 0) / 2 = 2.0.
+    jest.spyOn(HistoryManager, 'parseHistory').mockResolvedValue({
+      bbbbbbbb: [
+        {timestamp: 1, difficulty: 4},
+        {timestamp: 2, difficulty: 4},
+      ],
+    });
+    await openModal([]);
+    const scores = Array.from(
+      modal.contentEl.querySelectorAll('.practice-bank-score'),
+    ).map(el => el.textContent);
+    // Hanzi, Capitals, German (configured, no cards), French tag, Legacy.
+    expect(scores).toEqual([
+      'avg 0.0',
+      'avg 2.0',
+      'avg 0.0',
+      'avg 0.0',
+      'avg 0.0',
+    ]);
+  });
+
+  it('selecting banks shows the live average over their cards', async () => {
+    jest.spyOn(HistoryManager, 'parseHistory').mockResolvedValue({
+      bbbbbbbb: [
+        {timestamp: 1, difficulty: 4},
+        {timestamp: 2, difficulty: 4},
+      ],
+    });
+    await openModal([]);
+    const scoreEl = modal.contentEl.querySelector(
+      '.practice-selected-score',
+    ) as HTMLElement;
+    expect(scoreEl.style.display).toBe('none');
+
+    // Capitals (France avg 4 + unpracticed TF 0 → 2 cards) + empty German:
+    // the average weighs CARDS, not banks → 4 / 2 = 2.0.
+    check('Capitals');
+    check('German');
+    expect(scoreEl.style.display).toBe('');
+    expect(scoreEl.textContent).toBe('Average score: 2.0');
+
+    // Hanzi's 好 is unpracticed → dilutes the average: 4 / 3 ≈ 1.3.
+    check('Hanzi');
+    expect(scoreEl.textContent).toBe('Average score: 1.3');
+
+    check('Capitals', false);
+    check('German', false);
+    check('Hanzi', false);
+    expect(scoreEl.style.display).toBe('none');
+  });
 });

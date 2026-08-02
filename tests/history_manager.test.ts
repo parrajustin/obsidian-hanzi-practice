@@ -67,6 +67,11 @@ describe('HistoryManager', () => {
     jest
       .spyOn(Date, 'now')
       .mockReturnValue(new Date('2026-07-19T12:00:00Z').getTime());
+    // getNextDueEntry shuffles its candidate pool. ~1 makes Fisher-Yates
+    // the IDENTITY permutation (j === i every step), so these tests keep
+    // the deterministic historical file order; the shuffle-variety test
+    // overrides this per-case.
+    jest.spyOn(Math, 'random').mockReturnValue(0.999999);
   });
 
   it('should parse id-keyed history lines', async () => {
@@ -270,6 +275,39 @@ describe('HistoryManager', () => {
       'Nope',
     );
     expect(unknownBank).toBeNull();
+  });
+
+  it('getNextDueEntry shuffles ties so a batch of new cards varies', async () => {
+    // Two brand-new cards, equally due — the shuffle decides which comes
+    // first, so different random draws must surface different cards.
+    const files: Record<string, string> = {
+      'practice.md': '好\thao3\tgood\n汉\than4\tChinese',
+      'history.md': '',
+    };
+    (FileUtil.fetchFile as jest.Mock).mockImplementation(
+      (_app: App, path: string) =>
+        Promise.resolve(Ok(new TextEncoder().encode(files[path] ?? ''))),
+    );
+
+    // Identity permutation → historical file order (好 first).
+    (Math.random as jest.Mock).mockReturnValue(0.999999);
+    const first = await HistoryManager.getNextDueEntry(
+      mockApp,
+      'history.md',
+      HANZI_SOURCES,
+      HANZI_BANK,
+    );
+    expect(first && IsHanziEntry(first) && first.character).toBe('好');
+
+    // j = 0 on every step → the swap brings 汉 to the front.
+    (Math.random as jest.Mock).mockReturnValue(0);
+    const second = await HistoryManager.getNextDueEntry(
+      mockApp,
+      'history.md',
+      HANZI_SOURCES,
+      HANZI_BANK,
+    );
+    expect(second && IsHanziEntry(second) && second.character).toBe('汉');
   });
 
   it('getNextDueEntry practices several banks as one union pool', async () => {

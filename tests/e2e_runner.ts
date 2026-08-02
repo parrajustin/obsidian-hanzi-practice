@@ -826,6 +826,17 @@ async function run() {
       `Verified characters + cached pinyin/def/id in words file (好 -> ${haoPinyin}, ${haoId}).`,
     );
 
+    // The practice pool is SHUFFLED for variety (ties between equally-due
+    // cards resolve randomly). Pin Math.random for the rest of the run so
+    // every pick is deterministic: ~1 makes Fisher-Yates the IDENTITY
+    // permutation (j === i on every step), i.e. the historical file order
+    // every assertion below was written against. (Also pins the reversible
+    // card's side and the option shuffles — all assertions are agnostic or
+    // DOM-sorted anyway.)
+    await page.evaluate(() => {
+      Math.random = () => 0.999999;
+    });
+
     // STEP 6: Run the test command so you can test your hanzi skill
     console.log('STEP 6: Running test command...');
     await page.evaluate(() => {
@@ -2169,6 +2180,9 @@ async function run() {
         packBanks: Array.from(
           group.querySelectorAll('.practice-bank-name'),
         ).map(el => el.textContent),
+        packScores: Array.from(
+          group.querySelectorAll('.practice-bank-score'),
+        ).map(el => el.textContent),
         topLevel: Array.from(
           document.querySelectorAll(
             '.practice-bank-list > .practice-bank-row .practice-bank-name',
@@ -2176,6 +2190,15 @@ async function run() {
         ).map(el => el.textContent),
       };
     });
+    // Both pack banks are brand new → every card scores 0 until practiced.
+    if (
+      JSON.stringify(nested.packScores) !==
+      JSON.stringify(['avg 0.0', 'avg 0.0'])
+    ) {
+      throw new Error(
+        `Pack bank average scores wrong: ${JSON.stringify(nested)}`,
+      );
+    }
     if (
       nested.packName !== 'Euro Pack' ||
       JSON.stringify(nested.packBanks) !==
@@ -2201,6 +2224,9 @@ async function run() {
       const btn = document.querySelector(
         '.practice-selected',
       ) as HTMLButtonElement;
+      const scoreEl = document.querySelector(
+        '.practice-selected-score',
+      ) as HTMLElement;
       return {
         checks: Array.from(
           document.querySelectorAll(
@@ -2209,6 +2235,8 @@ async function run() {
         ).map(el => (el as HTMLInputElement).checked),
         btnText: btn.textContent,
         btnDisabled: btn.disabled,
+        selectedScore: scoreEl.textContent,
+        selectedScoreShown: scoreEl.style.display !== 'none',
       };
     });
     if (
@@ -2220,7 +2248,19 @@ async function run() {
         `Pack checkbox did not select the pack: ${JSON.stringify(selection)}`,
       );
     }
-    console.log('Verified the pack checkbox selects both banks.');
+    // Selecting banks surfaces the live average over their (unpracticed,
+    // hence 0-scoring) cards.
+    if (
+      !selection.selectedScoreShown ||
+      selection.selectedScore !== 'Average score: 0.0'
+    ) {
+      throw new Error(
+        `Selected average score wrong: ${JSON.stringify(selection)}`,
+      );
+    }
+    console.log(
+      'Verified the pack checkbox selects both banks (average score 0.0).',
+    );
     await takeAndCompareScreenshot(page, 'step13-pack-selected');
 
     console.log('STEP 13c: Practicing the selected pack as one pool...');

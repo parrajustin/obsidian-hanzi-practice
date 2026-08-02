@@ -263,6 +263,15 @@ export class HistoryManager {
 
     if (entries.length === 0) return null;
 
+    // Fisher-Yates shuffle the candidate pool: ties (e.g. a batch of
+    // brand-new cards, all equally due) surface in a different order every
+    // pick instead of always the same first-in-file card. The most-overdue
+    // card still wins — the shuffle only decides among equals.
+    for (let i = entries.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [entries[i], entries[j]] = [entries[j], entries[i]];
+    }
+
     const history = await this.parseHistory(app, historyFilePath);
 
     const today = SpacedRepetition.getCurrentDayNumber();

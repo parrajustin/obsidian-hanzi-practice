@@ -16,10 +16,17 @@ export class PracticeBankModal extends Modal {
   private plugin: HanziPracticePlugin;
   private listEl!: HTMLElement;
   private selectedBtn!: HTMLButtonElement;
+  private selectedScoreEl!: HTMLElement;
   /** Checked banks, in no particular order (render order applies on start). */
   private selected = new Set<string>();
   /** Every listed bank in render order — the order multi-practice uses. */
   private orderedBanks: string[] = [];
+  /**
+   * Per bank: the sum of its cards' average scores + its card count, for the
+   * per-row average and the live selected-average (an unpracticed card
+   * scores 0, so it drags the average down until it has been practiced).
+   */
+  private bankScores = new Map<string, {sum: number; count: number}>();
 
   constructor(app: App, plugin: HanziPracticePlugin) {
     super(app);
@@ -35,6 +42,12 @@ export class PracticeBankModal extends Modal {
     // The multi-select action: disabled until at least one bank is checked.
     const footer = contentEl.createDiv({cls: 'practice-selected-footer'});
     footer.style.marginTop = '12px';
+    // Live average over every card in the checked banks.
+    this.selectedScoreEl = footer.createDiv({cls: 'practice-selected-score'});
+    this.selectedScoreEl.style.display = 'none';
+    this.selectedScoreEl.style.textAlign = 'center';
+    this.selectedScoreEl.style.color = 'var(--text-muted)';
+    this.selectedScoreEl.style.margin = '4px 0';
     this.selectedBtn = footer.createEl('button', {
       cls: 'practice-selected',
       text: 'Practice selected (0)',
@@ -56,6 +69,22 @@ export class PracticeBankModal extends Modal {
   private updateSelectedButton() {
     this.selectedBtn.textContent = `Practice selected (${this.selected.size})`;
     this.selectedBtn.disabled = this.selected.size === 0;
+
+    if (this.selected.size === 0) {
+      this.selectedScoreEl.style.display = 'none';
+      return;
+    }
+    let sum = 0;
+    let count = 0;
+    for (const bank of this.selected) {
+      const score = this.bankScores.get(bank);
+      if (!score) continue;
+      sum += score.sum;
+      count += score.count;
+    }
+    const avg = count > 0 ? sum / count : 0;
+    this.selectedScoreEl.setText(`Average score: ${avg.toFixed(1)}`);
+    this.selectedScoreEl.style.display = '';
   }
 
   /**
@@ -102,6 +131,16 @@ export class PracticeBankModal extends Modal {
       text: `${count} card${count === 1 ? '' : 's'}`,
     });
 
+    // Average score over the bank's cards (an unpracticed card counts 0).
+    const score = this.bankScores.get(bank);
+    const avg = score && score.count > 0 ? score.sum / score.count : 0;
+    const scoreEl = btn.createEl('span', {
+      cls: 'practice-bank-score',
+      text: `avg ${avg.toFixed(1)}`,
+    });
+    scoreEl.style.marginLeft = '8px';
+    scoreEl.style.color = 'var(--text-muted)';
+
     btn.addEventListener('click', () => {
       this.close();
       void this.plugin.activateView(bank);
@@ -123,12 +162,31 @@ export class PracticeBankModal extends Modal {
     this.listEl.empty();
     this.orderedBanks = [];
     this.selected.clear();
-    this.updateSelectedButton();
 
     const counts = new Map<string, number>();
     for (const entry of entries) {
       counts.set(entry.bank, (counts.get(entry.bank) ?? 0) + 1);
     }
+
+    // Per-bank score aggregates: each card contributes the average of its
+    // reviews — 0 when it has never been practiced.
+    const history = await HistoryManager.parseHistory(
+      this.app,
+      this.plugin.settings.historyFilePath,
+    );
+    this.bankScores = new Map();
+    for (const entry of entries) {
+      const reviews = HistoryManager.reviewsForEntry(history, entry);
+      const cardAvg =
+        reviews.length > 0
+          ? reviews.reduce((sum, r) => sum + r.difficulty, 0) / reviews.length
+          : 0;
+      const bankScore = this.bankScores.get(entry.bank) ?? {sum: 0, count: 0};
+      bankScore.sum += cardAvg;
+      bankScore.count += 1;
+      this.bankScores.set(entry.bank, bankScore);
+    }
+    this.updateSelectedButton();
 
     // Configured banks first (in settings order, Hanzi leading), then any
     // extra bank names that only exist as legacy line tags.
