@@ -383,7 +383,7 @@ E2E runner (`tests/e2e_runner.ts` → `tests/e2e_runner.js`); both are committed
    `jest.config.js` are ignored. `npm run lint:fix` / `npm run format` to auto-fix — but beware:
    `eslint . --fix` on *unformatted* code once produced broken output from overlapping fixes;
    run `npm run format` (plain prettier) first, then `lint:fix`.
-3. `test:unit` — `npx jest`: 270 tests across 22 suites — the data layer
+3. `test:unit` — `npx jest`: 271 tests across 22 suites — the data layer
    (`practice_list` / `card_markdown_roundtrip` (per-card-type markdown save/load round-trips
    pinning the CARD_FORMATS.md format) / `data_pack` (pack JSON parse + bank merge) /
    `example_data_packs` (loads the shipped `examples/data-packs/*.json` + linked card files

@@ -122,6 +122,30 @@ describe('HanziPracticeView', () => {
     expect(nextDue).toHaveBeenCalledTimes(2); // onOpen + post-grade advance
   });
 
+  it('a plain (type 1) flashcard ALWAYS prompts with its front', async () => {
+    // Regression for a real vault line (`快⇥kuài — fast⇥⇥⇥1⇥L2 Words`):
+    // a non-reversible card must never show its definition side first, no
+    // matter what Math.random returns (the reversible coin flip must be
+    // gated on the card type).
+    const {parsePracticeList} = jest.requireActual<
+      typeof import('../src/utils/practice_list')
+    >('../src/utils/practice_list');
+    const [entry] = parsePracticeList('快\tkuài — fast\t\t\t1\tL2 Words');
+    expect(entry.cardType).toBe(CardType.FLASHCARD);
+
+    for (const roll of [0, 0.25, 0.4999, 0.75, 0.999]) {
+      jest.spyOn(Math, 'random').mockReturnValue(roll);
+      await openWith(entry, 'L2 Words');
+      expect(content().querySelector('.flash-card-front')?.textContent).toBe(
+        '快',
+      );
+      const back = content().querySelector('.flash-card-back') as HTMLElement;
+      expect(back.textContent).toBe('kuài — fast');
+      expect(back.style.display).toBe('none'); // hidden until flipped
+      jest.restoreAllMocks();
+    }
+  });
+
   it('may prompt a reversible flashcard with its back side', async () => {
     jest.spyOn(Math, 'random').mockReturnValue(0.1); // force reversed
     await openWith(REVERSIBLE, 'German');
