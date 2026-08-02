@@ -1,6 +1,8 @@
 import {App, ButtonComponent, Modal, Notice, Setting, TFile} from 'obsidian';
 import HanziPracticePlugin from '../main';
 import {HanziPluginSettings, resolveBankSources} from '../settings';
+import {LogInfo, LogWarn} from '../telemetry/telemetry';
+import {cardTypeName, describeEntry} from '../telemetry/card_debug';
 import {
   BankSource,
   CardType,
@@ -244,6 +246,15 @@ export class AddFlashcardModal extends Modal {
   }
 
   private showError(msg: string) {
+    // Validation rejections are user-visible actions worth having in a bug
+    // report ("it wouldn't let me add the card").
+    LogWarn('Add-card validation rejected input', {
+      modal: 'add-card',
+      reason: msg,
+      cardType: this.cardType,
+      cardTypeName: cardTypeName(this.cardType),
+      bank: this.bank?.name ?? null,
+    });
     new Notice(msg);
     this.errorEl.setText(msg);
     this.errorEl.style.display = 'block';
@@ -383,6 +394,14 @@ export class AddFlashcardModal extends Modal {
       await this.app.vault.create(filePath, newText);
     }
 
+    LogInfo('Card added to bank', {
+      modal: 'add-card',
+      bank: bank.name,
+      filePath,
+      createdFile: !(file instanceof TFile),
+      cardsInBankAfter: existing.length + 1,
+      ...describeEntry(entry),
+    });
     new Notice(`Added card to "${bank.name}".`);
     // Stay open for the next card of the same bank and type.
     this.front = '';

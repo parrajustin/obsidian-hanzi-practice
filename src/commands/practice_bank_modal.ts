@@ -2,6 +2,7 @@ import {App, Modal} from 'obsidian';
 import HanziPracticePlugin from '../main';
 import {resolveBankSources} from '../settings';
 import {HistoryManager} from '../utils/history_manager';
+import {LogInfo} from '../telemetry/telemetry';
 
 /**
  * The `practice` command's modal: lists every bank (the Hanzi bank plus each
@@ -59,6 +60,11 @@ export class PracticeBankModal extends Modal {
     this.selectedBtn.addEventListener('click', () => {
       if (this.selected.size === 0) return;
       const banks = this.orderedBanks.filter(b => this.selected.has(b));
+      LogInfo('User action: practice multiple banks', {
+        modal: 'choose-bank',
+        selectedBanks: banks,
+        availableBanks: this.orderedBanks,
+      });
       this.close();
       void this.plugin.activateView(banks);
     });
@@ -142,6 +148,12 @@ export class PracticeBankModal extends Modal {
     scoreEl.style.color = 'var(--text-muted)';
 
     btn.addEventListener('click', () => {
+      LogInfo('User action: practice a single bank', {
+        modal: 'choose-bank',
+        bank,
+        cardCount: score?.count ?? 0,
+        averageScore: avg,
+      });
       this.close();
       void this.plugin.activateView(bank);
     });

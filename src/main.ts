@@ -19,6 +19,7 @@ import {
   GetTelemetry,
   InitTelemetry,
   LogError,
+  LogDebug,
   LogInfo,
   ResetTelemetry,
   SetSpanAttribute,
@@ -134,6 +135,7 @@ export default class HanziPracticePlugin extends Plugin {
       id: 'open-hanzi-practice',
       name: 'Open Hanzi Practice View',
       callback: () => {
+        LogInfo('Command invoked', {command: 'open-hanzi-practice'});
         void this.activateView();
       },
     });
@@ -144,6 +146,7 @@ export default class HanziPracticePlugin extends Plugin {
       id: 'practice',
       name: 'Practice (Choose Bank)',
       callback: () => {
+        LogInfo('Command invoked', {command: 'practice', modal: 'choose-bank'});
         new PracticeBankModal(this.app, this).open();
       },
     });
@@ -152,6 +155,10 @@ export default class HanziPracticePlugin extends Plugin {
       id: 'add-hanzi-character',
       name: 'Add Hanzi Character to Practice',
       callback: () => {
+        LogInfo('Command invoked', {
+          command: 'add-hanzi-character',
+          modal: 'add-character',
+        });
         new AddCharacterModal(this.app, this).open();
       },
     });
@@ -162,6 +169,10 @@ export default class HanziPracticePlugin extends Plugin {
       id: 'add-flash-card',
       name: 'Add Card to Practice',
       callback: () => {
+        LogInfo('Command invoked', {
+          command: 'add-flash-card',
+          modal: 'add-card',
+        });
         new AddFlashcardModal(this.app, this).open();
       },
     });
@@ -172,13 +183,30 @@ export default class HanziPracticePlugin extends Plugin {
       id: 'edit-hanzi-bank',
       name: 'Edit Practice Banks',
       callback: () => {
+        LogInfo('Command invoked', {
+          command: 'edit-hanzi-bank',
+          modal: 'edit-banks',
+        });
         new EditBankModal(this.app, this).open();
       },
     });
 
     LogInfo('Plugin loaded', {
-      banks: this.settings.banks.length,
-      dataPacks: this.settings.dataPacks.length,
+      version: this.manifest.version,
+      historyFilePath: this.settings.historyFilePath,
+      practiceFilePath: this.settings.practiceFilePath,
+      banks: this.settings.banks.map(bank => ({
+        name: bank.name,
+        filePath: bank.filePath,
+      })),
+      dataPacks: this.settings.dataPacks.map(pack => pack.filePath),
+      commands: [
+        'open-hanzi-practice',
+        'practice',
+        'add-hanzi-character',
+        'add-flash-card',
+        'edit-hanzi-bank',
+      ],
     });
   }
 
@@ -205,27 +233,37 @@ export default class HanziPracticePlugin extends Plugin {
     this.reviewCountsByDay = countReviewsByDay(history);
   }
 
+  @Span()
   async activateView(banks: string | string[] = HANZI_BANK) {
     const {workspace} = this.app;
 
     // Reuse an existing practice tab if one is already open.
     let leaf: WorkspaceLeaf | null =
       workspace.getLeavesOfType(HANZI_VIEW_TYPE)[0] ?? null;
+    const reusedExistingLeaf = leaf !== null;
 
     if (!leaf) {
       // getLeaf('tab') opens a new tab in the main (center) editor area,
       // never in the left/right sidebars.
       leaf = workspace.getLeaf('tab');
     }
+    LogInfo('Activating practice view', {
+      requestedBanks: banks,
+      reusedExistingLeaf,
+      openLeaves: workspace.getLeavesOfType(HANZI_VIEW_TYPE).length,
+    });
 
     // Always set the state: an already-open practice tab switches to the
     // chosen bank(s) (view state — see HanziPracticeView.setState; single
     // banks keep the historical {bank} shape).
     const bankList = typeof banks === 'string' ? [banks] : banks;
+    const state =
+      bankList.length === 1 ? {bank: bankList[0]} : {banks: bankList};
+    LogDebug('Setting practice view state', {state, bankList});
     await leaf.setViewState({
       type: HANZI_VIEW_TYPE,
       active: true,
-      state: bankList.length === 1 ? {bank: bankList[0]} : {banks: bankList},
+      state,
     });
     await workspace.revealLeaf(leaf);
   }
