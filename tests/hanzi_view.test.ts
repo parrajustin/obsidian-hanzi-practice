@@ -97,6 +97,9 @@ describe('HanziPracticeView', () => {
     makeView();
     if (bank) await view.setState({bank}, {} as never);
     await view.onOpen();
+    // Opened with no state: the view defers its first load a tick, waiting
+    // for the banks Obsidian delivers right after onOpen (see onOpen).
+    await flush();
   };
 
   it('renders a flashcard and advances after self-grading', async () => {
@@ -217,7 +220,8 @@ describe('HanziPracticeView', () => {
   });
 
   describe('true/false cards', () => {
-    beforeEach(() => jest.useFakeTimers());
+    // Fake timers are switched on AFTER openWith: the view's first load is
+    // deferred one real macrotask (see onOpen).
     afterEach(() => jest.useRealTimers());
 
     const option = (text: string) =>
@@ -227,6 +231,7 @@ describe('HanziPracticeView', () => {
 
     it('renders via the multi-choice UI; a right pick grades 5 and advances', async () => {
       await openWith(TRUE_FALSE, 'Grammar');
+      jest.useFakeTimers();
       expect(content().querySelector('.mc-prompt')?.textContent).toBe(
         'Is this correct?',
       );
@@ -253,6 +258,7 @@ describe('HanziPracticeView', () => {
 
     it('a wrong pick grades 0, reveals the explanation, and pauses', async () => {
       await openWith(TRUE_FALSE, 'Grammar');
+      jest.useFakeTimers();
       option('Correct').dispatchEvent(new MouseEvent('click')); // wrong
       // The correction appears the moment the wrong pick happens.
       expect(
@@ -275,12 +281,13 @@ describe('HanziPracticeView', () => {
   });
 
   describe('wrong-answer explanations on self-graded cards', () => {
-    beforeEach(() => jest.useFakeTimers());
+    // Fake timers are switched on AFTER openWith (see above).
     afterEach(() => jest.useRealTimers());
 
     it('a failed flashcard shows its correction and pauses before advancing', async () => {
       const flash = {...FLASH, explanation: 'Think of the Eiffel Tower.'};
       await openWith(flash, 'Capitals');
+      jest.useFakeTimers();
       (
         content().querySelector('.flash-card-flip') as HTMLElement
       ).dispatchEvent(new MouseEvent('click'));
@@ -308,6 +315,7 @@ describe('HanziPracticeView', () => {
     it('a passed card advances immediately without the correction', async () => {
       const flash = {...FLASH, explanation: 'Think of the Eiffel Tower.'};
       await openWith(flash, 'Capitals');
+      jest.useFakeTimers();
       (
         content().querySelector('.flash-card-flip') as HTMLElement
       ).dispatchEvent(new MouseEvent('click'));
@@ -350,6 +358,47 @@ describe('HanziPracticeView', () => {
     // The bank header names every practiced bank.
     expect(content().querySelector('h2')?.textContent).toBe(
       'Practice: Capitals + German',
+    );
+  });
+
+  it('never practices the default Hanzi bank while the state is arriving', async () => {
+    // Obsidian opens a view BEFORE it hands it the leaf's state: onOpen runs
+    // with the default [Hanzi] banks and setState lands right after. The view
+    // must not start a Hanzi session in that window — doing so loaded the
+    // stroke database and flashed a stroke quiz for a bank the user never
+    // selected (the "a stroke quiz opened out of nowhere" bug report).
+    nextDue = jest
+      .spyOn(HistoryManager, 'getNextDueEntry')
+      .mockResolvedValue(FLASH);
+    makeView();
+    await view.onOpen();
+    await view.setState({banks: ['Capitals', 'German']}, {} as never);
+    await flush();
+
+    expect(nextDue).toHaveBeenCalledTimes(1);
+    expect(nextDue).toHaveBeenCalledWith(
+      expect.anything(),
+      'history.md',
+      expect.anything(),
+      ['Capitals', 'German'],
+    );
+    expect(content().querySelector('.flash-card-front')?.textContent).toBe(
+      'France',
+    );
+  });
+
+  it('practices the default Hanzi bank when no state ever arrives', async () => {
+    // The other half of the deferral: a leaf whose layout recorded no bank
+    // must still start practicing, not sit blank forever.
+    await openWith(HANZI);
+    expect(nextDue).toHaveBeenCalledWith(
+      expect.anything(),
+      'history.md',
+      expect.anything(),
+      ['Hanzi'],
+    );
+    expect(content().querySelector('.hanzi-meaning')?.textContent).toBe(
+      'Meaning: good',
     );
   });
 
@@ -416,9 +465,9 @@ describe('HanziPracticeView', () => {
 
   describe('handleQuizComplete grading', () => {
     beforeEach(async () => {
-      jest.useFakeTimers();
       noticeMessages.length = 0;
       await openWith(HANZI);
+      jest.useFakeTimers();
     });
 
     afterEach(() => jest.useRealTimers());
@@ -447,7 +496,10 @@ describe('HanziPracticeView', () => {
     });
 
     it('a failed hanzi card surfaces its explanation on the completion page', async () => {
+      // Re-opening runs the deferred first load, which needs real timers.
+      jest.useRealTimers();
       await openWith({...HANZI, explanation: '女 + 子 — woman with child.'});
+      jest.useFakeTimers();
       view.handleGiveUp(); // locks the score to 0 → fail
       await complete(0);
       expect(
@@ -456,7 +508,10 @@ describe('HanziPracticeView', () => {
     });
 
     it('a passed hanzi card keeps the explanation off the completion page', async () => {
+      // Re-opening runs the deferred first load, which needs real timers.
+      jest.useRealTimers();
       await openWith({...HANZI, explanation: '女 + 子 — woman with child.'});
+      jest.useFakeTimers();
       await complete(0); // clean quiz → 5
       expect(content().querySelector('.hanzi-complete-explanation')).toBeNull();
     });
@@ -479,8 +534,8 @@ describe('HanziPracticeView', () => {
 
   describe('tone gating', () => {
     beforeEach(async () => {
-      jest.useFakeTimers();
       await openWith(HANZI);
+      jest.useFakeTimers();
       appendResult.mockClear();
     });
 

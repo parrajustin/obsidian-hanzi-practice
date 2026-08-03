@@ -14,6 +14,16 @@ import {InitTelemetry, ResetTelemetry} from '../src/telemetry/telemetry';
 
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
 
+/**
+ * Open the leaf the way Obsidian does. The view defers its first load until
+ * the leaf's state lands (see HanziPracticeView.onOpen), so a test that opens
+ * without setting state first must let that tick run.
+ */
+const openView = async (view: HanziPracticeView) => {
+  await view.onOpen();
+  await flush();
+};
+
 interface LoggedRecord {
   level: string;
   message: string;
@@ -94,16 +104,36 @@ describe('practice view debug logging', () => {
 
   it('opens a session group for the leaf and closes it on unload', async () => {
     jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(null);
-    await view.onOpen();
+    await openView(view);
     expect(groups[0]).toMatchObject({action: 'start', name: 'practice:Hanzi'});
 
     await view.onClose();
     expect(groups[1]).toEqual({action: 'end', id: groups[0]!.id});
   });
 
-  it('logs the leaf opening with its banks', async () => {
+  it('scopes the session group to the banks the leaf actually practices', async () => {
+    // The group must be named (and the session opened) only once the leaf's
+    // real banks have landed — Obsidian delivers them after onOpen, so naming
+    // it there would file every multi-bank session under "practice:Hanzi".
     jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(null);
     await view.onOpen();
+    await view.setState({banks: ['Capitals', 'German']}, {
+      history: false,
+    } as never);
+    await flush();
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0]).toMatchObject({
+      action: 'start',
+      name: 'practice:Capitals+German',
+    });
+    expect(find('Practice view opened (leaf)')).toHaveLength(1);
+    expect(find('Resolved practice bank sources')).toHaveLength(1);
+  });
+
+  it('logs the leaf opening with its banks', async () => {
+    jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(null);
+    await openView(view);
     const opened = find('Practice view opened (leaf)')[0]!;
     expect(opened.level).toBe('info');
     expect(opened.data['banks']).toEqual(['Hanzi']);
@@ -111,7 +141,7 @@ describe('practice view debug logging', () => {
 
   it('logs which bank sources were resolved', async () => {
     jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(null);
-    await view.onOpen();
+    await openView(view);
     const resolved = find('Resolved practice bank sources')[0]!;
     expect(resolved.data['requestedBanks']).toEqual(['Hanzi']);
     expect(resolved.data['availableSources']).toEqual([
@@ -123,7 +153,7 @@ describe('practice view debug logging', () => {
 
   it('logs the selected card with its id, type and bank', async () => {
     jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(FLASH);
-    await view.onOpen();
+    await openView(view);
     const selected = find('Next due card selected')[0]!;
     expect(selected.data).toMatchObject({
       id: 'aaaaaaaa',
@@ -135,7 +165,7 @@ describe('practice view debug logging', () => {
 
   it('logs which RENDERER drew the card', async () => {
     jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(FLASH);
-    await view.onOpen();
+    await openView(view);
     const shown = find('Card shown')[0]!;
     expect(shown.data['renderer']).toBe('flashcard');
     expect(shown.data['id']).toBe('aaaaaaaa');
@@ -143,7 +173,7 @@ describe('practice view debug logging', () => {
 
   it('logs the prompt side chosen for a flashcard', async () => {
     jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(FLASH);
-    await view.onOpen();
+    await openView(view);
     const side = find('Flashcard prompt side chosen')[0]!;
     expect(side.data['promptSide']).toBe('front');
     expect(side.data['promptText']).toBe('France');
@@ -152,7 +182,7 @@ describe('practice view debug logging', () => {
   it('logs the grade with the card identity and duration', async () => {
     jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(FLASH);
     jest.spyOn(HistoryManager, 'appendResult').mockResolvedValue(undefined);
-    await view.onOpen();
+    await openView(view);
     await view.handleCardGrade(FLASH, 4);
     await flush();
 
@@ -170,7 +200,7 @@ describe('practice view debug logging', () => {
   it('logs an empty bank instead of silently rendering nothing', async () => {
     jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(null);
     await view.setState({bank: 'Capitals'}, {history: false} as never);
-    await view.onOpen();
+    await openView(view);
     expect(
       find('Rendered empty-bank message (no cards to practice)'),
     ).toHaveLength(1);

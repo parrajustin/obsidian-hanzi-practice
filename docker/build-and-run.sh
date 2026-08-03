@@ -51,6 +51,7 @@ stage_pkg() {
 stage_pkg obsidian-hanzi-practice
 stage_pkg standard-obsidian-lib
 stage_pkg standard-ts-lib
+stage_pkg obsidian-bug-collector
 
 echo ">> Building image: $IMAGE"
 docker build -t "$IMAGE" -f "$REPO_DIR/docker/Dockerfile" "$CTX"

@@ -52,7 +52,16 @@ hotkeys/history.
   one OR SEVERAL banks as a single pool (`banks: string[]` is view state via
   `setState`/`getState`, default `[Hanzi]`; single-bank state keeps the historical `{bank}`
   shape so old workspace layouts restore, multi-bank persists as `{banks}`; headers and the
-  tab title label them `Practice: A + B`) and renders whatever UI the due card's type needs: flashcards get a
+  tab title label them `Practice: A + B`). **`onOpen` does NOT load a card** — Obsidian opens a
+  view *before* handing it the leaf's state (`leaf.setViewState` = `await leaf.open(view)` →
+  `view.setState(...)`), so onOpen only ever sees the default `[Hanzi]` banks; it therefore
+  defers the first load one macrotask (`initialLoadTimer`) and the `setState` that lands right
+  after takes it over via `startPractice()` (which also opens the telemetry session group, so
+  the group is named after the REAL banks). Without that deferral every open — including every
+  Obsidian restart that restores the tab — briefly started a full Hanzi session (stroke DB +
+  stroke quiz) for a bank the user never chose. The timer only fires when no bank state ever
+  arrives (an old layout that recorded none), which keeps the plain "open Hanzi practice" path
+  working. It renders whatever UI the due card's type needs: flashcards get a
   `FlashCard`, multiple-choice cards a `MultiChoiceCard` (auto-grade mapping lives in
   `renderMultiChoice`), cloze cards a `ClozeCard`, true/false cards the `MultiChoiceCard`
   reuse (`renderTrueFalse`) — all funnel into `gradeCard` (appends history, then advances —

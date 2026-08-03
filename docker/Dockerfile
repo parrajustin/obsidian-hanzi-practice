@@ -33,10 +33,12 @@ RUN npm install -g pnpm@11
 WORKDIR /workspace
 
 # Sibling file: deps first (change rarely -> better layer caching). The plugin's
-# package.json references `file:../standard-*`, so the layout under /workspace
-# mirrors the host: /workspace/{obsidian-hanzi-practice,standard-*}.
+# package.json references `file:../standard-*` and `file:../obsidian-bug-collector`,
+# so the layout under /workspace mirrors the host:
+# /workspace/{obsidian-hanzi-practice,standard-*,obsidian-bug-collector}.
 COPY standard-ts-lib/ ./standard-ts-lib/
 COPY standard-obsidian-lib/ ./standard-obsidian-lib/
+COPY obsidian-bug-collector/ ./obsidian-bug-collector/
 
 WORKDIR /workspace/obsidian-hanzi-practice
 

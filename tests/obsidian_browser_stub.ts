@@ -11,6 +11,9 @@
  * one depends on jest.fn() and cannot run in a page, hence this sibling.
  */
 
+/** Obsidian's app version — main.ts reports it as telemetry baggage. */
+export const apiVersion = '0.0.0-stub';
+
 /** Every Notice text shown, for assertions from the runner. */
 export const stubNoticeMessages: string[] = [];
 
