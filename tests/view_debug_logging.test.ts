@@ -38,6 +38,15 @@ const FLASH: PracticeEntry = {
   back: 'Paris',
 };
 
+const MC: PracticeEntry = {
+  id: 'bbbbbbbb',
+  cardType: CardType.MULTIPLE_CHOICE,
+  bank: 'Grammar',
+  question: '你__狗吗？',
+  answer: '有没有',
+  distractors: ['不有'],
+};
+
 describe('practice view debug logging', () => {
   let logs: LoggedRecord[];
   let groups: Array<{action: string; name?: string; id?: string}>;
@@ -204,6 +213,118 @@ describe('practice view debug logging', () => {
     expect(
       find('Rendered empty-bank message (no cards to practice)'),
     ).toHaveLength(1);
+  });
+
+  describe('the user-input track', () => {
+    const click = (selector: string) => {
+      const el = view.containerEl.querySelector(selector);
+      expect(el).not.toBeNull();
+      (el as HTMLElement).dispatchEvent(
+        new MouseEvent('click', {bubbles: true}),
+      );
+    };
+
+    it('logs every control pressed, with the card it was pressed on', async () => {
+      jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(FLASH);
+      await openView(view);
+
+      click('.flash-card-flip');
+      const clicks = find('User clicked');
+      expect(clicks).toHaveLength(1);
+      expect(clicks[0]!.data).toMatchObject({
+        surface: 'practice-view',
+        control: 'button',
+        label: 'Show Answer',
+        classes: ['flash-card-flip'],
+        // The card on screen when it was pressed.
+        id: 'aaaaaaaa',
+        bank: 'Capitals',
+      });
+    });
+
+    it('carries a grade button score in the click log', async () => {
+      jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(FLASH);
+      jest.spyOn(HistoryManager, 'appendResult').mockResolvedValue(undefined);
+      await openView(view);
+
+      click('.flash-card-flip');
+      click('.flash-card-grade[data-score="4"]');
+      const graded = find('User clicked').at(-1)!;
+      expect(graded.data).toMatchObject({
+        label: 'Easy',
+        classes: ['flash-card-grade'],
+        data: {score: '4'},
+      });
+    });
+
+    it('ignores clicks that are not on a control', async () => {
+      jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(FLASH);
+      await openView(view);
+
+      click('.flash-card-front'); // the prompt text, not a button
+      expect(find('User clicked')).toHaveLength(0);
+    });
+
+    it('logs revealing the answer as its own action', async () => {
+      jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(FLASH);
+      await openView(view);
+
+      click('.flash-card-flip');
+      const revealed = find('User action: revealed the answer')[0]!;
+      expect(revealed.data).toMatchObject({
+        renderer: 'flashcard',
+        id: 'aaaaaaaa',
+      });
+      expect(typeof revealed.data['secondsThinking']).toBe('number');
+    });
+
+    it('logs each answer picked on an auto-graded card, right or wrong', async () => {
+      jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(MC);
+      jest.spyOn(HistoryManager, 'appendResult').mockResolvedValue(undefined);
+      await openView(view);
+
+      const options = Array.from(
+        view.containerEl.querySelectorAll<HTMLElement>('.mc-option'),
+      );
+      const wrong = options.find(o => o.textContent === '不有')!;
+      const right = options.find(o => o.textContent === '有没有')!;
+      wrong.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+      right.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+
+      const picks = find('User action: picked an answer');
+      expect(picks).toHaveLength(2);
+      expect(picks[0]!.data).toMatchObject({
+        renderer: 'multi-choice',
+        option: '不有',
+        correct: false,
+        mistakesSoFar: 1,
+        id: 'bbbbbbbb',
+      });
+      expect(picks[1]!.data).toMatchObject({
+        option: '有没有',
+        correct: true,
+        mistakesSoFar: 1,
+      });
+    });
+
+    it('logs leaving the plugin with what the session amounted to', async () => {
+      jest.spyOn(HistoryManager, 'getNextDueEntry').mockResolvedValue(FLASH);
+      jest.spyOn(HistoryManager, 'appendResult').mockResolvedValue(undefined);
+      await openView(view);
+      await view.handleCardGrade(FLASH, 4);
+      await flush();
+
+      await view.onClose();
+      const left = find(
+        'User action: left the practice view (leaf closed)',
+      )[0]!;
+      expect(left.data).toMatchObject({
+        banks: ['Hanzi'],
+        cardsGraded: 1,
+      });
+      expect(left.data['cardsShown']).toBeGreaterThanOrEqual(1);
+      expect(typeof left.data['sessionSeconds']).toBe('number');
+    });
   });
 
   it('logs a bank switch through view state', async () => {

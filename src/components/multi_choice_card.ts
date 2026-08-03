@@ -7,6 +7,11 @@ export interface MultiChoiceCardOptions {
    * (and kept visible). A clean run never shows it.
    */
   explanation?: string;
+  /**
+   * Told about EVERY pick (not just the completing one), so the view can log
+   * which options were tried before the right one.
+   */
+  onPick?: (pick: {option: string; correct: boolean; mistakes: number}) => void;
 }
 
 /**
@@ -120,6 +125,11 @@ export class MultiChoiceCard {
             b.disabled = true;
             if (b !== btn) b.style.opacity = '0.5';
           });
+          this.options.onPick?.({
+            option,
+            correct: true,
+            mistakes: this.mistakes,
+          });
           this.onComplete(this.mistakes);
         } else {
           btn.style.border = '5px solid red';
@@ -127,6 +137,11 @@ export class MultiChoiceCard {
           btn.style.opacity = '0.5';
           this.mistakes++;
           if (explanationEl) explanationEl.style.display = 'block';
+          this.options.onPick?.({
+            option,
+            correct: false,
+            mistakes: this.mistakes,
+          });
         }
       };
     }

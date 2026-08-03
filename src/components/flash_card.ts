@@ -24,6 +24,8 @@ export class FlashCard {
   private onGrade: (score: number) => void;
   private explanation: string;
   private graded = false;
+  /** Told when the answer is revealed, so the view can log the flip. */
+  private onFlip: () => void;
 
   constructor(
     container: HTMLElement,
@@ -31,12 +33,14 @@ export class FlashCard {
     back: string,
     onGrade: (score: number) => void,
     explanation = '',
+    onFlip: () => void = () => {},
   ) {
     this.container = container;
     this.front = front;
     this.back = back;
     this.onGrade = onGrade;
     this.explanation = explanation;
+    this.onFlip = onFlip;
   }
 
   render() {
@@ -118,6 +122,7 @@ export class FlashCard {
       backEl.style.display = '';
       flipBtn.style.display = 'none';
       gradesEl.style.display = 'flex';
+      this.onFlip();
     };
   }
 }

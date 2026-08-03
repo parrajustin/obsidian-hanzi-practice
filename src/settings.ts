@@ -14,7 +14,8 @@ import {
   parseDataPack,
 } from './utils/data_pack';
 import {BankSource, HANZI_BANK} from './utils/practice_list';
-import {LogError} from './telemetry/telemetry';
+import {LogError, LogInfo} from './telemetry/telemetry';
+import {UiClickLogger} from './telemetry/ui_debug';
 import {HistoryManager} from './utils/history_manager';
 
 const v0Schema = z.object({
@@ -184,6 +185,8 @@ export class HanziSettingTab extends PluginSettingTab {
   settings: HanziPluginSettings;
   saveSettings: (settings: HanziPluginSettings) => Promise<void>;
 
+  private uiClicks = new UiClickLogger('settings-tab');
+
   constructor(
     app: App,
     plugin: Plugin,
@@ -199,6 +202,16 @@ export class HanziSettingTab extends PluginSettingTab {
   display(): void {
     const {containerEl} = this;
     containerEl.empty();
+    LogInfo('Settings tab opened', {
+      historyFilePath: this.settings.historyFilePath,
+      practiceFilePath: this.settings.practiceFilePath,
+      banks: this.settings.banks.map(bank => bank.name),
+      dataPacks: this.settings.dataPacks.map(pack => pack.filePath),
+    });
+    // display() runs again on every settings open AND after every bank added
+    // or removed, always on this same containerEl — attach() is idempotent so
+    // the click listener cannot stack up, and hide() unloads it.
+    this.uiClicks.attach(containerEl);
 
     new Setting(containerEl)
       .setName('History File Path')
@@ -209,6 +222,10 @@ export class HanziSettingTab extends PluginSettingTab {
           .setValue(this.settings.historyFilePath)
           .onChange(async value => {
             this.settings.historyFilePath = value;
+            LogInfo('User action: changed a setting', {
+              setting: 'historyFilePath',
+              value,
+            });
             await this.saveSettings(this.settings);
           }),
       );
@@ -224,6 +241,10 @@ export class HanziSettingTab extends PluginSettingTab {
           .setValue(this.settings.practiceFilePath)
           .onChange(async value => {
             this.settings.practiceFilePath = value;
+            LogInfo('User action: changed a setting', {
+              setting: 'practiceFilePath',
+              value,
+            });
             await this.saveSettings(this.settings);
           }),
       );
@@ -251,6 +272,12 @@ export class HanziSettingTab extends PluginSettingTab {
             .setPlaceholder('Bank name')
             .setValue(bank.name)
             .onChange(async value => {
+              LogInfo('User action: renamed a bank', {
+                setting: 'bank.name',
+                from: bank.name,
+                to: value,
+                filePath: bank.filePath,
+              });
               bank.name = value;
               await this.saveSettings(this.settings);
             });
@@ -261,6 +288,12 @@ export class HanziSettingTab extends PluginSettingTab {
             .setPlaceholder('bank-cards.md')
             .setValue(bank.filePath)
             .onChange(async value => {
+              LogInfo('User action: repointed a bank file', {
+                setting: 'bank.filePath',
+                bank: bank.name,
+                from: bank.filePath,
+                to: value,
+              });
               bank.filePath = value;
               await this.saveSettings(this.settings);
             });
@@ -271,6 +304,11 @@ export class HanziSettingTab extends PluginSettingTab {
             .setIcon('trash')
             .setTooltip('Remove this bank (its file is not deleted)')
             .onClick(async () => {
+              LogInfo('User action: removed a bank', {
+                bank: bank.name,
+                filePath: bank.filePath,
+                note: 'config only — the card file is left on disk',
+              });
               this.settings.banks.splice(i, 1);
               await this.saveSettings(this.settings);
               this.display();
@@ -286,10 +324,12 @@ export class HanziSettingTab extends PluginSettingTab {
         btn.buttonEl.addClass('hanzi-bank-add');
         btn.setButtonText('Add Bank').onClick(async () => {
           const n = this.settings.banks.length + 1;
-          this.settings.banks.push({
+          const added = {
             name: `Bank ${n}`,
             filePath: `practice-bank-${n}.md`,
-          });
+          };
+          LogInfo('User action: added a bank', {...added});
+          this.settings.banks.push(added);
           await this.saveSettings(this.settings);
           this.display();
         });
@@ -317,6 +357,11 @@ export class HanziSettingTab extends PluginSettingTab {
             .setPlaceholder('my-pack.json')
             .setValue(pack.filePath)
             .onChange(async value => {
+              LogInfo('User action: repointed a data pack', {
+                setting: 'dataPack.filePath',
+                from: pack.filePath,
+                to: value,
+              });
               pack.filePath = value;
               await this.saveSettings(this.settings);
             });
@@ -329,6 +374,10 @@ export class HanziSettingTab extends PluginSettingTab {
               'Unregister this pack (its JSON and card files are not deleted)',
             )
             .onClick(async () => {
+              LogInfo('User action: unregistered a data pack', {
+                filePath: pack.filePath,
+                note: 'config only — the JSON and card files stay on disk',
+              });
               this.settings.dataPacks.splice(i, 1);
               await this.saveSettings(this.settings);
               this.display();
@@ -346,6 +395,10 @@ export class HanziSettingTab extends PluginSettingTab {
       // Reset so picking the same file again fires another change event.
       fileInput.value = '';
       if (!file) return;
+      LogInfo('User action: picked a data pack to import', {
+        fileName: file.name,
+        bytes: file.size,
+      });
       void this.importDataPackFile(file);
     });
 
@@ -433,6 +486,7 @@ export class HanziSettingTab extends PluginSettingTab {
    * many cards each file yielded.
    */
   override hide(): void {
+    this.uiClicks.unload();
     void (async () => {
       const {sources, packErrors} = await resolveBankSources(
         this.app,
@@ -448,6 +502,12 @@ export class HanziSettingTab extends PluginSettingTab {
           `${source.name}: ${entries.length} card${entries.length === 1 ? '' : 's'}`,
         );
       }
+      // What the settings the user just edited actually resolve to — the
+      // same summary the Notice shows, kept in the log for the report.
+      LogInfo('Settings tab closed; banks re-parsed', {
+        banks: parts,
+        brokenDataPacks: packErrors.map(packError => packError.filePath),
+      });
       new Notice(`Practice banks parsed — ${parts.join(', ')}`);
       for (const packError of packErrors) {
         new Notice(

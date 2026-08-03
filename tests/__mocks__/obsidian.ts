@@ -28,11 +28,58 @@ export class Workspace {
   getRightLeaf = jest.fn().mockReturnValue(new WorkspaceLeaf());
   revealLeaf = jest.fn();
   detachLeavesOfType = jest.fn();
+  /** Event registration (active-leaf-change, …) — returns an EventRef stub. */
+  on = jest.fn().mockReturnValue({});
+  off = jest.fn();
 }
 
 export class WorkspaceLeaf {
   view = new ItemView(this);
   setViewState = jest.fn();
+}
+
+/**
+ * Real implementation, not a jest.fn(): the UI click logger IS a Component,
+ * and the tests assert that unloading it actually removes the listener.
+ * Mirrors Obsidian's semantics — register() collects teardown callbacks,
+ * unload() runs them once and is a no-op when not loaded.
+ */
+export class Component {
+  private loaded = false;
+  private cleanups: Array<() => unknown> = [];
+
+  load() {
+    if (this.loaded) return;
+    this.loaded = true;
+    this.onload();
+  }
+
+  unload() {
+    if (!this.loaded) return;
+    this.loaded = false;
+    while (this.cleanups.length > 0) this.cleanups.pop()?.();
+    this.onunload();
+  }
+
+  onload() {}
+  onunload() {}
+
+  register(cb: () => unknown) {
+    this.cleanups.push(cb);
+  }
+
+  registerEvent() {}
+
+  registerDomEvent(
+    el: HTMLElement | Window | Document,
+    type: string,
+    callback: (event: Event) => unknown,
+  ) {
+    el.addEventListener(type, callback as EventListener);
+    this.register(() =>
+      el.removeEventListener(type, callback as EventListener),
+    );
+  }
 }
 
 export class ItemView {
@@ -62,10 +109,28 @@ export class ItemView {
 
   onOpen() {}
   onClose() {}
+
+  /**
+   * Real implementation, not a jest.fn(): the practice view logs every click
+   * through this, and the tests assert on that log — so the listener has to
+   * actually be attached. Obsidian's version also unregisters on unload,
+   * which a per-test view instance does not need.
+   */
+  registerDomEvent(
+    el: HTMLElement | Window | Document,
+    type: string,
+    callback: (event: Event) => unknown,
+  ) {
+    el.addEventListener(type, callback as EventListener);
+  }
+
+  registerEvent = jest.fn();
 }
 
 export class Plugin {
   app = new App();
+  registerEvent = jest.fn();
+  registerDomEvent = jest.fn();
   addSettingTab = jest.fn();
   addCommand = jest.fn();
   registerView = jest.fn();
@@ -256,6 +321,22 @@ export class Modal {
   }
   onOpen() {}
   onClose() {}
+
+  /**
+   * Real implementation, not a jest.fn(): the practice view logs every click
+   * through this, and the tests assert on that log — so the listener has to
+   * actually be attached. Obsidian's version also unregisters on unload,
+   * which a per-test view instance does not need.
+   */
+  registerDomEvent(
+    el: HTMLElement | Window | Document,
+    type: string,
+    callback: (event: Event) => unknown,
+  ) {
+    el.addEventListener(type, callback as EventListener);
+  }
+
+  registerEvent = jest.fn();
 }
 
 /** Every Notice text shown since the last `noticeMessages.length = 0`. */

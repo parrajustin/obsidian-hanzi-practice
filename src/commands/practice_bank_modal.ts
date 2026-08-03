@@ -2,7 +2,8 @@ import {App, Modal} from 'obsidian';
 import HanziPracticePlugin from '../main';
 import {resolveBankSources} from '../settings';
 import {HistoryManager} from '../utils/history_manager';
-import {LogInfo} from '../telemetry/telemetry';
+import {LogDebug, LogInfo} from '../telemetry/telemetry';
+import {UiClickLogger} from '../telemetry/ui_debug';
 
 /**
  * The `practice` command's modal: lists every bank (the Hanzi bank plus each
@@ -29,6 +30,9 @@ export class PracticeBankModal extends Modal {
    */
   private bankScores = new Map<string, {sum: number; count: number}>();
 
+  private uiClicks = new UiClickLogger('modal:choose-bank', () => ({
+    selectedBanks: [...this.selected],
+  }));
   constructor(app: App, plugin: HanziPracticePlugin) {
     super(app);
     this.plugin = plugin;
@@ -37,6 +41,8 @@ export class PracticeBankModal extends Modal {
   onOpen() {
     const {contentEl} = this;
     contentEl.empty();
+    LogInfo('Modal opened', {modal: 'choose-bank'});
+    this.uiClicks.attach(contentEl);
     contentEl.createEl('h2', {text: 'Choose a Practice Bank'});
     this.listEl = contentEl.createDiv({cls: 'practice-bank-list'});
 
@@ -116,6 +122,13 @@ export class PracticeBankModal extends Modal {
       if (check.checked) this.selected.add(bank);
       else this.selected.delete(bank);
       onToggle(bank, check.checked);
+      LogInfo('User action: toggled a bank', {
+        modal: 'choose-bank',
+        bank,
+        checked: check.checked,
+        cardCount: count,
+        selectedBanks: [...this.selected],
+      });
       this.updateSelectedButton();
     });
 
@@ -210,6 +223,15 @@ export class PracticeBankModal extends Modal {
       if (!banks.includes(bank)) banks.push(bank);
     }
 
+    LogDebug('Practice bank list rendered', {
+      modal: 'choose-bank',
+      banks: banks.map(bank => ({bank, cards: counts.get(bank) ?? 0})),
+      packs: packGroups.map(group => ({
+        name: group.name,
+        banks: group.bankNames,
+      })),
+    });
+
     // Pack-contributed banks render nested under their pack, not top-level.
     const packOwned = new Set(packGroups.flatMap(g => g.bankNames));
     const noop = () => {};
@@ -256,12 +278,27 @@ export class PracticeBankModal extends Modal {
           if (groupCheck.checked) this.selected.add(bank);
           else this.selected.delete(bank);
         }
+        // A pack checkbox (un)checks EVERY bank it owns — including hanzi
+        // (stroke) banks the user may not realise they just signed up for.
+        LogInfo('User action: toggled a whole data pack', {
+          modal: 'choose-bank',
+          pack: group.name,
+          checked: groupCheck.checked,
+          packBanks: group.bankNames,
+          selectedBanks: [...this.selected],
+        });
         this.updateSelectedButton();
       });
     }
   }
 
   onClose() {
+    // Obsidian tears the click listener down with this component.
+    this.uiClicks.unload();
+    LogInfo('Modal closed', {
+      modal: 'choose-bank',
+      selectedBanks: [...this.selected],
+    });
     const {contentEl} = this;
     contentEl.empty();
   }

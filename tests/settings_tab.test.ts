@@ -7,6 +7,7 @@ import {Err, Ok} from 'standard-ts-lib/src/result';
 import {NotFoundError} from 'standard-ts-lib/src/status_error';
 import {TextEncoder, TextDecoder} from 'util';
 import {HanziPluginSettings, HanziSettingTab} from '../src/settings';
+import {InitTelemetry, ResetTelemetry} from '../src/telemetry/telemetry';
 import {HistoryManager} from '../src/utils/history_manager';
 
 global.TextEncoder = TextEncoder;
@@ -60,6 +61,84 @@ describe('HanziSettingTab', () => {
       saveSettings,
     );
     tab.display();
+  });
+
+  describe('click logging is registered, not leaked', () => {
+    /**
+     * The settings tab is NOT an Obsidian Component, so its click logger owns
+     * one — and `display()` re-runs on every settings open AND after every
+     * bank added or removed, on the SAME containerEl. A plain
+     * addEventListener would therefore stack up one listener per render (and
+     * survive the tab closing).
+     */
+    const clickLogs = () =>
+      logs.filter(entry => entry.message === 'User clicked');
+
+    let logs: Array<{message: string; data: Record<string, unknown>}>;
+
+    beforeEach(() => {
+      logs = [];
+      ResetTelemetry();
+      window.bugCollector = {
+        apiVersion: 3,
+        register: () => ({
+          pluginId: 'hanzi-practice',
+          pluginVersion: '1.0.0',
+          getBaggage: () => ({}),
+          setBaggage: () => {},
+          log: (
+            _level: string,
+            message: string,
+            data: Record<string, unknown>,
+          ) => void logs.push({message, data}),
+          getTracer: () => ({}),
+          getMeter: () => ({
+            createCounter: () => ({add: () => {}}),
+            createHistogram: () => ({record: () => {}}),
+            createObservableGauge: () => ({addCallback: () => {}}),
+          }),
+          start: () => {},
+          restart: () => {},
+          end: () => {},
+          startGroup: () => 'group',
+          endGroup: () => {},
+        }),
+      } as never;
+      InitTelemetry('test');
+    });
+
+    afterEach(() => {
+      ResetTelemetry();
+      delete window.bugCollector;
+    });
+
+    it('logs a click once, no matter how often the tab re-renders', () => {
+      tab.display();
+      tab.display();
+      tab.display();
+
+      (
+        tab.containerEl.querySelector('.hanzi-bank-add') as HTMLElement
+      ).dispatchEvent(new MouseEvent('click', {bubbles: true}));
+
+      expect(clickLogs()).toHaveLength(1);
+      expect(clickLogs()[0].data).toMatchObject({
+        surface: 'settings-tab',
+        classes: ['hanzi-bank-add'],
+      });
+    });
+
+    it('stops logging once the tab is closed', () => {
+      tab.display();
+      const addButton = tab.containerEl.querySelector(
+        '.hanzi-bank-add',
+      ) as HTMLElement;
+
+      tab.hide();
+      addButton.dispatchEvent(new MouseEvent('click', {bubbles: true}));
+
+      expect(clickLogs()).toHaveLength(0);
+    });
   });
 
   it('edits to the file-path fields save the settings', async () => {

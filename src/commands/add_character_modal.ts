@@ -1,5 +1,7 @@
 import {App, ButtonComponent, Modal, Notice, Setting, TFile} from 'obsidian';
 import HanziPracticePlugin from '../main';
+import {LogDebug, LogInfo, LogWarn} from '../telemetry/telemetry';
+import {UiClickLogger} from '../telemetry/ui_debug';
 import {HanziPluginSettings} from '../settings';
 import {CedictEntry} from '../dictionary/cedict_parser';
 import {lookupDefinitions} from '../dictionary/definition_lookup';
@@ -25,6 +27,10 @@ export class AddCharacterModal extends Modal {
   /** Monotonic lookup counter so a slow lookup can't clobber a newer one. */
   private lookupSeq = 0;
 
+  private uiClicks = new UiClickLogger('modal:add-character', () => ({
+    character: this.character,
+    hasSelectedSense: this.selectedEntry !== null,
+  }));
   constructor(app: App, plugin: HanziPracticePlugin) {
     super(app);
     this.plugin = plugin;
@@ -34,6 +40,8 @@ export class AddCharacterModal extends Modal {
   onOpen() {
     const {contentEl} = this;
     contentEl.empty();
+    LogInfo('Modal opened', {modal: 'add-character'});
+    this.uiClicks.attach(contentEl);
     contentEl.createEl('h2', {text: 'Add New Hanzi Character'});
 
     new Setting(contentEl)
@@ -112,6 +120,13 @@ export class AddCharacterModal extends Modal {
     }
 
     const entries = lookupDefinitions(dictRes.val, term);
+    // "It found nothing for my character" needs the term as the dictionary
+    // actually saw it, and how many senses came back.
+    LogDebug('Dictionary lookup finished', {
+      modal: 'add-character',
+      term,
+      senses: entries.length,
+    });
     if (entries.length === 0) {
       this.statusEl.setText(`No dictionary entries found for "${term}".`);
       return;
@@ -153,6 +168,14 @@ export class AddCharacterModal extends Modal {
     optEl.addClass('is-selected');
     optEl.style.borderColor = 'var(--interactive-accent)';
     optEl.style.backgroundColor = 'var(--background-modifier-hover)';
+    // WHICH sense was picked decides the pinyin + definition cached onto the
+    // card (and therefore its id) — the root of "wrong meaning" reports.
+    LogInfo('User action: chose a dictionary sense', {
+      modal: 'add-character',
+      character: this.character.trim(),
+      pinyin: entry.pinyin,
+      english: entry.english,
+    });
     this.selectedEntry = entry;
     this.clearError();
     this.setAddEnabled(true);
@@ -183,6 +206,12 @@ export class AddCharacterModal extends Modal {
     const id = computeEntryId(char, entry.pinyin);
     const existing = parsePracticeList(text);
     if (existing.some(e => e.id === id)) {
+      LogWarn('Add-character rejected a duplicate', {
+        modal: 'add-character',
+        character: char,
+        pinyin: entry.pinyin,
+        entryId: id,
+      });
       this.showError(
         `"${char} (${prettifyPinyin(entry.pinyin)})" is already in your practice list.`,
       );
@@ -211,10 +240,23 @@ export class AddCharacterModal extends Modal {
       await this.app.vault.create(filePath, newText);
     }
 
+    LogInfo('Character added to the Hanzi bank', {
+      modal: 'add-character',
+      character: char,
+      pinyin: entry.pinyin,
+      english: entry.english,
+      entryId: id,
+      filePath,
+      createdFile: !(file instanceof TFile),
+      cardsInBankAfter: existing.length + 1,
+    });
     this.close();
   }
 
   onClose() {
+    // Obsidian tears the click listener down with this component.
+    this.uiClicks.unload();
+    LogInfo('Modal closed', {modal: 'add-character'});
     const {contentEl} = this;
     contentEl.empty();
   }

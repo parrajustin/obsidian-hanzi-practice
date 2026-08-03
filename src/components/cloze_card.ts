@@ -15,6 +15,8 @@ export class ClozeCard {
   private onGrade: (score: number) => void;
   private explanation: string;
   private graded = false;
+  /** Told when the answer is revealed, so the view can log the reveal. */
+  private onReveal: () => void;
 
   constructor(
     container: HTMLElement,
@@ -22,12 +24,14 @@ export class ClozeCard {
     hint: string,
     onGrade: (score: number) => void,
     explanation = '',
+    onReveal: () => void = () => {},
   ) {
     this.container = container;
     this.text = text;
     this.hint = hint;
     this.onGrade = onGrade;
     this.explanation = explanation;
+    this.onReveal = onReveal;
   }
 
   render() {
@@ -138,6 +142,7 @@ export class ClozeCard {
       answerEl.style.display = '';
       revealBtn.style.display = 'none';
       gradesEl.style.display = 'flex';
+      this.onReveal();
     };
   }
 }

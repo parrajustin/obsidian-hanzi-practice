@@ -12,6 +12,19 @@ import {
   computeMultiChoiceId,
 } from '../src/utils/practice_list';
 import {prettifyPinyin} from '../src/utils/prettify_pinyin';
+// The telemetry assertion vocabulary ships with the collector, so every plugin
+// that reports through it verifies its logs the same way (see its
+// src/testing/log_expectations.ts).
+import {
+  Contains,
+  Exactly,
+  ExpectLog,
+  LogExpectation,
+  LogsFrom,
+  Never,
+  VerifyLogExpectations,
+} from 'obsidian-bug-collector/src/testing/log_expectations';
+import {TelemetryEnvelope} from 'obsidian-bug-collector/src/telemetry/records';
 
 // --- Mobile emulation ----------------------------------------------------
 // E2E_EMULATE_MOBILE=1 runs the whole flow with Obsidian's built-in mobile
@@ -2342,6 +2355,218 @@ async function run() {
     }
     console.log('Verified the union advances across banks after grading.');
     await dump(page, 'step13-union-advanced');
+
+    // ------------------------------------------------------------------
+    // STEP 14: the telemetry itself. Everything above asserts what the UI
+    // DOES; this asserts that the plugin correctly REPORTS what the user did
+    // — the debug trail a bug report is read from is otherwise never tested,
+    // and silently losing it is invisible until someone needs it.
+    //
+    // The collector is enabled only now, after the last golden: enabled, it
+    // contributes a settings tab and would shift every settings screenshot.
+    // Re-enabling hanzi-practice afterwards makes its onload re-run
+    // InitTelemetry, which is what binds it to the collector.
+    // ------------------------------------------------------------------
+    console.log('STEP 14: Installing + enabling the Bug Collector...');
+    // Installed HERE, not at vault setup: the Community-plugins pane lists
+    // installed plugins, so a second one present from the start would shift
+    // the step1/step3 goldens. Obsidian rescans the plugin folder on
+    // loadManifests(), which is what makes a late install visible.
+    // The collector's main.js is gitignored (built, not committed), so a
+    // missing file means "build the sibling repo", not "the test is broken".
+    const collectorRepo = path.join(
+      __dirname,
+      '..',
+      '..',
+      'obsidian-bug-collector',
+    );
+    const collectorPath = path.join(
+      vaultPath,
+      '.obsidian',
+      'plugins',
+      'bug-collector',
+    );
+    fs.mkdirSync(collectorPath, {recursive: true});
+    for (const file of ['main.js', 'manifest.json', 'styles.css']) {
+      const from = path.join(collectorRepo, file);
+      if (!fs.existsSync(from)) {
+        throw new Error(
+          `${from} not found — run \`npm run build\` in ` +
+            'obsidian-bug-collector (its main.js is gitignored) so the ' +
+            'telemetry step can install it.',
+        );
+      }
+      fs.copyFileSync(from, path.join(collectorPath, file));
+    }
+    const telemetryReady = await page.evaluate(async () => {
+      const app = (window as any).app;
+      app.workspace.detachLeavesOfType('hanzi-practice-view');
+      // Pick up the plugin folder that appeared after startup.
+      await app.plugins.loadManifests();
+      await app.plugins.enablePluginAndSave('bug-collector');
+      await app.plugins.disablePlugin('hanzi-practice');
+      await app.plugins.enablePluginAndSave('hanzi-practice');
+      await new Promise(r => setTimeout(r, 500));
+      return {
+        collectorLoaded: !!app.plugins.plugins['bug-collector'],
+        apiVersion: (window as any).bugCollector?.apiVersion ?? null,
+        hanziLoaded: !!app.plugins.plugins['hanzi-practice'],
+      };
+    });
+    if (
+      !telemetryReady.collectorLoaded ||
+      !telemetryReady.hanziLoaded ||
+      telemetryReady.apiVersion !== 3
+    ) {
+      await dump(page, 'STEP14-telemetry-not-ready');
+      throw new Error(
+        `Bug Collector did not come up: ${JSON.stringify(telemetryReady)}`,
+      );
+    }
+    console.log(
+      `Bug Collector enabled (apiVersion ${telemetryReady.apiVersion}); ` +
+        'hanzi-practice re-registered.',
+    );
+
+    // Everything from here is what STEP 14 asserts on.
+    const telemetrySince: number = await page.evaluate(() => Date.now());
+
+    // A COLD open of a multi-bank view: no practice leaf exists (detached
+    // above), so Obsidian creates the view, runs onOpen with the DEFAULT
+    // [Hanzi] banks, and only then delivers the real ones via setState. This
+    // is the exact shape of the "a stroke quiz opened out of nowhere" report:
+    // the assertions below prove no Hanzi session is started in that window.
+    console.log('STEP 14a: Cold-opening a multi-bank practice view...');
+    await page.evaluate(async () => {
+      await (window as any).app.plugins.plugins['hanzi-practice'].activateView([
+        'French',
+        'Spanish',
+      ]);
+    });
+    await page.waitForSelector('.flash-card-flip', {timeout: 10000});
+
+    console.log('STEP 14b: Clicking through a card while telemetry watches...');
+    await page.click('.flash-card-flip');
+    await page.waitForSelector('.flash-card-grade', {timeout: 10000});
+    await page.evaluate(() => {
+      const easy = Array.from(
+        document.querySelectorAll('.flash-card-grade'),
+      ).find(b => (b as HTMLElement).dataset.score === '4');
+      (easy as HTMLElement | undefined)?.click();
+    });
+    // Let the grade land in history (and its log with it) before reading.
+    await delay(1500);
+    // Leaving the plugin is its own logged action.
+    await page.evaluate(() => {
+      (window as any).app.workspace.detachLeavesOfType('hanzi-practice-view');
+    });
+    await delay(500);
+
+    console.log('STEP 14c: Reading the telemetry back out of the collector...');
+    const telemetry = await page.evaluate(async (since: number) => {
+      // Any plugin may register and read; the collector stores every
+      // plugin's records in the same day file (see its api.ts).
+      const api = (window as any).bugCollector.register({
+        pluginId: 'e2e-runner',
+        pluginVersion: '1.0.0',
+      });
+      await api.flush();
+      const read = await api.getRecords(since, Date.now() + 1000);
+      if (!read.ok) {
+        return {error: String(read.val?.message ?? 'getRecords failed')};
+      }
+      // Cross the CDP boundary as plain JSON.
+      return {records: JSON.parse(JSON.stringify(read.val.records))};
+    }, telemetrySince);
+    if (telemetry.error || !telemetry.records) {
+      await dump(page, 'STEP14-records-unreadable');
+      throw new Error(`Could not read telemetry back: ${telemetry.error}`);
+    }
+    const logs = LogsFrom(
+      telemetry.records as TelemetryEnvelope[],
+      'hanzi-practice',
+    );
+    log(`STEP 14: collector returned ${logs.length} hanzi-practice log(s).`);
+    if (logs.length === 0) {
+      await dump(page, 'STEP14-no-logs');
+      throw new Error(
+        'The collector stored NO hanzi-practice logs — telemetry is not ' +
+          'reaching it at all.',
+      );
+    }
+
+    // gMock-style: what MUST have been logged for this interaction, and what
+    // must NOT have been (the phantom Hanzi session).
+    const expectations: LogExpectation[] = [
+      // The cold open practices the banks that were asked for...
+      ExpectLog({
+        message: 'Practice view opened (leaf)',
+        data: {banks: ['French', 'Spanish']},
+      }).times(Exactly(1)),
+      // ...and NEVER the default Hanzi bank it was created with.
+      ExpectLog({
+        message: 'Practice view opened (leaf)',
+        data: {banks: ['Hanzi']},
+      }).times(Never()),
+      ExpectLog({message: 'Card shown', data: {renderer: 'hanzi-quiz'}}).times(
+        Never(),
+      ),
+      // The click track: the flip button, by class and label.
+      ExpectLog({
+        message: 'User clicked',
+        data: {
+          surface: 'practice-view',
+          label: 'Show Answer',
+          classes: Contains('flash-card-flip'),
+        },
+      }),
+      ExpectLog({message: 'User action: revealed the answer'}),
+      // The grade button, carrying the score it was pressed with.
+      ExpectLog({
+        message: 'User clicked',
+        data: {classes: Contains('flash-card-grade'), data: {score: '4'}},
+      }),
+      ExpectLog({message: 'Card graded', data: {score: 4, passed: true}}),
+      // What was SAVED for that card, and the schedule it bought.
+      ExpectLog({
+        message: 'Practice result saved to history',
+        data: {score: 4, passed: true, dueAgainToday: false},
+      }),
+      // Leaving the plugin.
+      ExpectLog({
+        message: 'User action: left the practice view (leaf closed)',
+      }),
+      // Nothing should have failed while doing all that.
+      ExpectLog({level: 'error'}).times(Never()),
+    ];
+    const verdict = VerifyLogExpectations(logs, expectations);
+    if (verdict.err) {
+      await dump(page, 'STEP14-log-expectations-failed');
+      throw new Error(`Telemetry expectations failed:\n${verdict.val.message}`);
+    }
+    console.log(
+      `Verified ${expectations.length} telemetry expectations over ` +
+        `${logs.length} logs (clicks, grade, history write, leaving).`,
+    );
+
+    // The same records must also be on disk as NDJSON — that file is what a
+    // bug report ships, so "it was in memory" is not good enough.
+    const collectorLogDir = path.join(vaultPath, 'bug-collector');
+    const ndjson = fs.existsSync(collectorLogDir)
+      ? fs
+          .readdirSync(collectorLogDir)
+          .filter(name => name.endsWith('.ndjson'))
+          .map(name =>
+            fs.readFileSync(path.join(collectorLogDir, name), 'utf-8'),
+          )
+          .join('\n')
+      : '';
+    if (!ndjson.includes('"User clicked"')) {
+      throw new Error(
+        `The collector's NDJSON in ${collectorLogDir} has no click records`,
+      );
+    }
+    console.log('Verified the clicks are persisted in the collector NDJSON.');
 
     log('E2E steps complete!');
     log('Closing Obsidian...');

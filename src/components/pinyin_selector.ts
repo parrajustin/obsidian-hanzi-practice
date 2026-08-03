@@ -7,15 +7,27 @@ export class PinyinSelector {
   private mistakes = 0;
   private buttons: HTMLButtonElement[] = [];
   private completed = false;
+  /** Told about every tone press, so the view can log the wrong ones too. */
+  private onPick: (pick: {
+    option: string;
+    correct: boolean;
+    mistakes: number;
+  }) => void;
 
   constructor(
     container: HTMLElement,
     correctPinyin: string,
     onComplete: (mistakes: number) => void,
+    onPick: (pick: {
+      option: string;
+      correct: boolean;
+      mistakes: number;
+    }) => void = () => {},
   ) {
     this.container = container;
     this.correctPinyin = correctPinyin;
     this.onComplete = onComplete;
+    this.onPick = onPick;
   }
 
   render() {
@@ -57,12 +69,14 @@ export class PinyinSelector {
             b.disabled = true;
             if (b !== btn) b.style.opacity = '0.5';
           });
+          this.onPick({option, correct: true, mistakes: this.mistakes});
           this.onComplete(this.mistakes);
         } else {
           btn.style.border = '5px solid red'; // Penalty outline (per architecture spec)
           btn.disabled = true;
           btn.style.opacity = '0.5';
           this.mistakes++;
+          this.onPick({option, correct: false, mistakes: this.mistakes});
         }
       };
     }

@@ -2,6 +2,7 @@ import {App, ButtonComponent, Modal, Notice, Setting, TFile} from 'obsidian';
 import HanziPracticePlugin from '../main';
 import {HanziPluginSettings, resolveBankSources} from '../settings';
 import {LogInfo, LogWarn} from '../telemetry/telemetry';
+import {UiClickLogger} from '../telemetry/ui_debug';
 import {cardTypeName, describeEntry} from '../telemetry/card_debug';
 import {
   BankSource,
@@ -61,6 +62,10 @@ export class AddFlashcardModal extends Modal {
   private fieldsEl!: HTMLElement;
   private textInputs: HTMLTextAreaElement[] = [];
 
+  private uiClicks = new UiClickLogger('modal:add-card', () => ({
+    bank: this.bank?.name,
+    cardType: this.cardType,
+  }));
   constructor(app: App, plugin: HanziPracticePlugin) {
     super(app);
     this.plugin = plugin;
@@ -68,6 +73,8 @@ export class AddFlashcardModal extends Modal {
   }
 
   onOpen() {
+    LogInfo('Modal opened', {modal: 'add-card'});
+    this.uiClicks.attach(this.contentEl);
     void this.renderContent();
   }
 
@@ -101,6 +108,11 @@ export class AddFlashcardModal extends Modal {
         banks.forEach((bank, i) => dropdown.addOption(String(i), bank.name));
         dropdown.setValue('0').onChange(value => {
           this.bank = banks[parseInt(value, 10)] ?? banks[0];
+          LogInfo('User action: chose a bank', {
+            modal: 'add-card',
+            bank: this.bank.name,
+            filePath: this.bank.filePath,
+          });
           this.clearError();
         });
       });
@@ -116,6 +128,11 @@ export class AddFlashcardModal extends Modal {
         dropdown.addOption(String(CardType.TRUE_FALSE), 'True / false');
         dropdown.setValue(String(CardType.FLASHCARD)).onChange(value => {
           this.cardType = parseInt(value, 10) as CardType;
+          LogInfo('User action: chose a card type', {
+            modal: 'add-card',
+            cardType: this.cardType,
+            cardTypeName: cardTypeName(this.cardType),
+          });
           this.clearError();
           this.renderFields();
         });
@@ -378,6 +395,12 @@ export class AddFlashcardModal extends Modal {
     // live in two different banks — but not twice in the same one.
     const existing = parsePracticeList(text);
     if (existing.some(e => e.id === entry.id)) {
+      LogWarn('Add-card rejected a duplicate', {
+        modal: 'add-card',
+        bank: bank.name,
+        filePath,
+        ...describeEntry(entry),
+      });
       this.showError(`This card is already in the "${bank.name}" bank.`);
       return; // keep the modal open so the user can correct the input
     }
@@ -420,6 +443,9 @@ export class AddFlashcardModal extends Modal {
   }
 
   onClose() {
+    // Obsidian tears the click listener down with this component.
+    this.uiClicks.unload();
+    LogInfo('Modal closed', {modal: 'add-card'});
     const {contentEl} = this;
     contentEl.empty();
   }

@@ -131,6 +131,8 @@ export default class HanziPracticePlugin extends Plugin {
       (leaf: WorkspaceLeaf) => new HanziPracticeView(leaf, this),
     );
 
+    this.registerPracticeFocusLogging();
+
     this.addCommand({
       id: 'open-hanzi-practice',
       name: 'Open Hanzi Practice View',
@@ -266,6 +268,49 @@ export default class HanziPracticePlugin extends Plugin {
       state,
     });
     await workspace.revealLeaf(leaf);
+  }
+
+  /**
+   * "I left the plugin": the practice tab staying OPEN but no longer being
+   * looked at is invisible to the view's own open/close logs — switching to
+   * another tab, collapsing to a sidebar or moving Obsidian to the background
+   * all end a practice session in every sense except the leaf's. This tracks
+   * that, so a report reads "graded a card, left for 4 minutes, came back".
+   */
+  private registerPracticeFocusLogging() {
+    let inPracticeView = false;
+    let leftAt: number | null = null;
+    this.registerEvent(
+      this.app.workspace.on('active-leaf-change', leaf => {
+        const nowInView = leaf?.view?.getViewType() === HANZI_VIEW_TYPE;
+        if (nowInView === inPracticeView) return;
+        inPracticeView = nowInView;
+        if (nowInView) {
+          LogInfo('User action: returned to the practice view', {
+            awaySeconds:
+              leftAt === null
+                ? undefined
+                : Math.round((Date.now() - leftAt) / 1000),
+          });
+          leftAt = null;
+          return;
+        }
+        leftAt = Date.now();
+        LogInfo('User action: left the practice view (switched away)', {
+          switchedTo: leaf?.view?.getViewType() ?? 'none',
+        });
+      }),
+    );
+    // Obsidian itself losing focus (alt-tab, phone locked): the practice tab
+    // is still the active leaf, so the event above never fires.
+    this.registerDomEvent(window, 'blur', () => {
+      if (!inPracticeView) return;
+      LogInfo('User action: left the practice view (window lost focus)');
+    });
+    this.registerDomEvent(window, 'focus', () => {
+      if (!inPracticeView) return;
+      LogInfo('User action: returned to the practice view (window focused)');
+    });
   }
 
   onunload() {

@@ -24,6 +24,16 @@ CONTAINER_GOLDEN_DIR="/workspace/obsidian-hanzi-practice/tests/__goldens__"
 # the staged context contains it for the Dockerfile's extract step.
 "$REPO_DIR/scripts/fetch_obsidian.sh"
 
+# STEP 14 installs the Bug Collector into the test vault to assert this
+# plugin's telemetry. Its main.js is gitignored (built, not committed), so
+# build the sibling if it is missing — the same "ensure the prerequisite"
+# contract as fetching the AppImage above.
+COLLECTOR_DIR="$PARENT_DIR/obsidian-bug-collector"
+if [ -d "$COLLECTOR_DIR" ] && [ ! -f "$COLLECTOR_DIR/main.js" ]; then
+  echo ">> Building obsidian-bug-collector (its main.js is not committed)"
+  (cd "$COLLECTOR_DIR" && npm run build)
+fi
+
 CTX="$(mktemp -d)"
 cleanup() { rm -rf "$CTX"; }
 trap cleanup EXIT

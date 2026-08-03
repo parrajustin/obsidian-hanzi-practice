@@ -27,6 +27,50 @@ export class App {}
 
 export class WorkspaceLeaf {}
 
+/**
+ * Real implementation, not a jest.fn(): the UI click logger IS a Component,
+ * and the tests assert that unloading it actually removes the listener.
+ * Mirrors Obsidian's semantics — register() collects teardown callbacks,
+ * unload() runs them once and is a no-op when not loaded.
+ */
+export class Component {
+  private loaded = false;
+  private cleanups: Array<() => unknown> = [];
+
+  load() {
+    if (this.loaded) return;
+    this.loaded = true;
+    this.onload();
+  }
+
+  unload() {
+    if (!this.loaded) return;
+    this.loaded = false;
+    while (this.cleanups.length > 0) this.cleanups.pop()?.();
+    this.onunload();
+  }
+
+  onload() {}
+  onunload() {}
+
+  register(cb: () => unknown) {
+    this.cleanups.push(cb);
+  }
+
+  registerEvent() {}
+
+  registerDomEvent(
+    el: HTMLElement | Window | Document,
+    type: string,
+    callback: (event: Event) => unknown,
+  ) {
+    el.addEventListener(type, callback as EventListener);
+    this.register(() =>
+      el.removeEventListener(type, callback as EventListener),
+    );
+  }
+}
+
 export class ItemView {
   containerEl = document.createElement('div');
 
@@ -43,6 +87,16 @@ export class ItemView {
   getDisplayText() {
     return 'Stub View';
   }
+
+  registerDomEvent(
+    el: HTMLElement | Window | Document,
+    type: string,
+    callback: (event: Event) => unknown,
+  ) {
+    el.addEventListener(type, callback as EventListener);
+  }
+
+  registerEvent() {}
 
   async setState() {}
 

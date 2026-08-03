@@ -273,7 +273,35 @@ hotkeys/history.
   (pure/non-mutating) merges pack banks by name (add / re-point path / unchanged; the
   reserved name `Hanzi` is skipped). User-facing format doc: `CARD_FORMATS.md` (card line
   format per type, bank loading, data packs — keep it in sync with format changes).
-- Depends on sibling repos `../standard-obsidian-lib` and `../standard-ts-lib` (`file:` deps).
+- `src/telemetry/` — the debug trail a bug report is read from. `telemetry.ts` is the front
+  door over the **Bug Collector** plugin (`obsidian-bug-collector`, a `file:` sibling dep):
+  `InitTelemetry` registers this plugin, `LogInfo/LogDebug/LogWarn/LogError` are the ONLY
+  logging path (the console is written to solely when the collector is missing, once per
+  reason), `@Span`/`SetSpanAttribute` come from the collector, and every helper degrades to a
+  no-op with no collector installed. `card_debug.ts` (`describeEntry`) gives every card-related
+  line the same identity shape; `ui_debug.ts` (`LogUiClick`/`UiClickLogger`) is the raw
+  **input track** — one delegated click listener per surface logs `User clicked` with the
+  control's kind, label, classes, `data-*` and checked/disabled state, so the log replays as
+  the literal sequence of controls pressed. Listener OWNERSHIP is the subtle part: the view is
+  an `ItemView` (a Component) so it uses `this.registerDomEvent`, but Obsidian's `Modal` and
+  `SettingTab` are **not** Components — they have no `register`/`registerDomEvent`, so each
+  owns a `UiClickLogger` (itself a `Component`): `attach(root)` on open, `unload()` on close.
+  `attach` is idempotent because `PluginSettingTab.display()` re-runs on every settings open
+  AND after every bank added/removed, always on the same `containerEl` — a bare
+  `addEventListener` there stacks one listener per render and outlives the tab; `metrics.ts`/`practice_volume.ts` are the counters
+  and gauges. **What is recorded**: plugin load/unload, every command invoked, every modal
+  opened/closed and its decisions (bank + card type chosen, dictionary sense picked, card
+  added, duplicate rejected, card removed), every settings edit (paths, banks added/renamed/
+  repointed/removed, packs imported/unregistered), the practice view's whole life (banks
+  resolved, card selected, renderer used, prompt side, per-stroke accept/reject, tone answered,
+  answers picked right or wrong, answer revealed, grade computed), **what was saved for a card**
+  (`Practice result saved to history`: the exact history line, score, review count, and the
+  schedule it bought — `dueInDays`/`dueAgainToday`), and **leaving**: leaf closed (with the
+  session's card counts and duration), switched away to another tab, and the Obsidian window
+  losing/regaining focus. A practice session is a collector GROUP (`practice:<banks>`), so a
+  report can be filed against exactly one sitting.
+- Depends on sibling repos `../standard-obsidian-lib`, `../standard-ts-lib` and
+  `../obsidian-bug-collector` (`file:` deps).
   `FileUtil.fetchFile(app, path, RAW)` reads via `app.vault.adapter.readBinary` (vault-root
   relative); `OBSIDIAN` type reads via the vault API.
 
@@ -549,6 +577,31 @@ Then re-run `npm run test:e2e:docker` and confirm every `[visual]` line reports 
    header `Practice: French + Spanish`, showing `bonjour` (French file listed first → first
    due; golden `step13-multi-bank-practice`); grading it Very Easy must surface `hola` —
    the union schedules across both banks as one pool (dump only).
+
+14. **Telemetry — does the plugin actually REPORT what the user did?** Everything
+   above asserts what the UI does; this asserts the debug trail. Installs the
+   **Bug Collector** into the vault at setup (disabled) and enables it only HERE —
+   an enabled collector contributes a settings tab and would shift every settings
+   golden — then disables/re-enables hanzi-practice so its `onload` re-runs
+   `InitTelemetry` and binds to the collector (asserted: `window.bugCollector`
+   apiVersion 3). It then COLD-opens a multi-bank view (no leaf exists, so
+   onOpen runs with the default `[Hanzi]` banks before setState lands — the exact
+   shape of the phantom-stroke-quiz bug), flips a card, grades it 4, and detaches
+   the leaf. The records are read back in-page (`bugCollector.register(...)` →
+   `flush()` → `getRecords(since, now)`, all plugins/signals) and verified in node
+   with the collector's gMock-style vocabulary
+   (`obsidian-bug-collector/src/testing/log_expectations`):
+   `Practice view opened (leaf)` with `banks: ['French','Spanish']` **Exactly(1)**,
+   with `banks: ['Hanzi']` **Never()**, `Card shown` renderer `hanzi-quiz`
+   **Never()** (the regression), `User clicked` for the flip button (label +
+   classes) and for the grade button (`data.score === '4'`), `User action:
+   revealed the answer`, `Card graded` score 4, `Practice result saved to
+   history` (score + schedule), `User action: left the practice view (leaf
+   closed)`, and **no error-level record at all**. Finally it asserts the same
+   clicks are persisted as NDJSON under the vault's `bug-collector/` folder —
+   that file is what a bug report ships, so in-memory is not good enough. The
+   collector's `main.js` is gitignored, so `docker/build-and-run.sh` builds the
+   sibling repo if it is missing.
 
 ### Validate a run
 - **Exit code 0** and the log's last line is `RESULT: PASS`:

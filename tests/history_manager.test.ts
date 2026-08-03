@@ -12,12 +12,54 @@ import {App} from 'obsidian';
 import {FileUtil} from 'standard-obsidian-lib/src/filesystem/file_util';
 import {Ok} from 'standard-ts-lib/src/result';
 import {TextEncoder, TextDecoder} from 'util';
+import {InitTelemetry, ResetTelemetry} from '../src/telemetry/telemetry';
 
 global.TextEncoder = TextEncoder;
 global.TextDecoder = TextDecoder as any;
 
 // Mock FileUtil
 jest.mock('standard-obsidian-lib/src/filesystem/file_util');
+
+/**
+ * A minimal Bug Collector so the "what was saved for this card" log can be
+ * asserted: it is the record a "why is this card due again already?" report
+ * is answered from, so it belongs to the contract, not to the noise.
+ */
+function captureLogs(): Array<{
+  level: string;
+  message: string;
+  data: Record<string, unknown>;
+}> {
+  const logs: Array<{
+    level: string;
+    message: string;
+    data: Record<string, unknown>;
+  }> = [];
+  window.bugCollector = {
+    apiVersion: 3,
+    register: () => ({
+      pluginId: 'hanzi-practice',
+      pluginVersion: '1.0.0',
+      getBaggage: () => ({}),
+      setBaggage: () => {},
+      log: (level: string, message: string, data: Record<string, unknown>) =>
+        void logs.push({level, message, data}),
+      getTracer: () => ({}),
+      getMeter: () => ({
+        createCounter: () => ({add: () => {}}),
+        createHistogram: () => ({record: () => {}}),
+        createObservableGauge: () => ({addCallback: () => {}}),
+      }),
+      start: () => {},
+      restart: () => {},
+      end: () => {},
+      startGroup: () => 'group',
+      endGroup: () => {},
+    }),
+  } as never;
+  InitTelemetry('test');
+  return logs;
+}
 
 const HAN_ID = computeEntryId('汉', 'han4');
 const YU_ID = computeEntryId('语', 'yu3');
@@ -174,6 +216,62 @@ describe('HistoryManager', () => {
     );
     const history = await HistoryManager.parseHistory(mockApp, 'history.md');
     expect(history[HAO3_ID].length).toBe(1);
+  });
+
+  it('appendResult logs the score it saved and the schedule it bought', async () => {
+    const logs = captureLogs();
+    (FileUtil.fetchFile as jest.Mock).mockResolvedValue(Ok(new Uint8Array(0)));
+    (FileUtil.writeToFile as jest.Mock).mockResolvedValue(Ok(undefined));
+
+    const card = hanziEntry('好', 'hao3', 'good');
+    await HistoryManager.appendResult(mockApp, 'history.md', card, 5);
+
+    const saved = logs.filter(
+      l => l.message === 'Practice result saved to history',
+    );
+    expect(saved).toHaveLength(1);
+    expect(saved[0].data).toMatchObject({
+      id: HAO3_ID,
+      character: '好',
+      bank: HANZI_BANK,
+      score: 5,
+      passed: true,
+      historyFilePath: 'history.md',
+      reviewCount: 1,
+      // A first pass schedules the card one day out — the answer to "why
+      // has it not come back?" is right here on the line.
+      dueInDays: 1,
+      dueAgainToday: false,
+    });
+    expect(saved[0].data['line']).toContain(`${HAO3_ID} 好 (hao3): 5`);
+
+    ResetTelemetry();
+    delete window.bugCollector;
+  });
+
+  it('appendResult logs a FAILED card as due again today', async () => {
+    const logs = captureLogs();
+    (FileUtil.fetchFile as jest.Mock).mockResolvedValue(Ok(new Uint8Array(0)));
+    (FileUtil.writeToFile as jest.Mock).mockResolvedValue(Ok(undefined));
+
+    await HistoryManager.appendResult(
+      mockApp,
+      'history.md',
+      hanziEntry('好', 'hao3', 'good'),
+      0,
+    );
+
+    expect(
+      logs.find(l => l.message === 'Practice result saved to history')!.data,
+    ).toMatchObject({
+      score: 0,
+      passed: false,
+      dueInDays: 0,
+      dueAgainToday: true,
+    });
+
+    ResetTelemetry();
+    delete window.bugCollector;
   });
 
   it('appendResult round-trips flashcard labels with spaces and parens', async () => {

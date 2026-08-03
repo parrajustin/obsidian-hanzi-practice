@@ -7,6 +7,7 @@ import {SpacedRepetition, Review} from '../spaced_repetition';
 import {
   LogError,
   LogErrorAsWarning,
+  LogInfo,
   SetSpanAttribute,
   SetSpanAttributes,
   Span,
@@ -25,6 +26,7 @@ import {
   PracticeEntry,
   parsePracticeList,
 } from './practice_list';
+import {describeEntry} from '../telemetry/card_debug';
 
 /**
  * History lines are keyed by the practice item's id (see `computeCardId` and
@@ -153,7 +155,29 @@ export class HistoryManager {
         entryId: entry.id,
         score,
       });
+      return;
     }
+
+    // WHAT WAS SAVED, for this exact card: the line as written, plus the
+    // schedule that score just bought — a "why is this card back already"
+    // (or "why has it vanished for a month") report is answered from here
+    // alone. Parsed from the text already in hand; no second file read.
+    const history = this.parseHistoryText(newText);
+    const reviews = this.reviewsForEntry(history, entry);
+    const dueDay = SpacedRepetition.calculateDueDayNumber(reviews);
+    const today = SpacedRepetition.getCurrentDayNumber();
+    LogInfo('Practice result saved to history', {
+      ...describeEntry(entry),
+      score,
+      passed: score >= 3,
+      historyFilePath,
+      line: line.trim(),
+      timestamp,
+      reviewCount: reviews.length,
+      averageScore: Number(this.averageScore(reviews).toFixed(2)),
+      dueInDays: dueDay - today,
+      dueAgainToday: dueDay <= today,
+    });
   }
 
   /**
@@ -175,7 +199,15 @@ export class HistoryManager {
     }
 
     const decoder = new TextDecoder('utf-8');
-    const text = decoder.decode(fileResult.val);
+    return this.parseHistoryText(decoder.decode(fileResult.val));
+  }
+
+  /**
+   * The parser itself, over history text that has already been read — so a
+   * caller holding the file contents (appendResult, which reads it to append)
+   * does not read them a second time.
+   */
+  static parseHistoryText(text: string): Record<string, Review[]> {
     const lines = text.split('\n');
 
     const history: Record<string, Review[]> = {};

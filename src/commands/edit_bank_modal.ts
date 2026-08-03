@@ -2,6 +2,9 @@ import {App, Modal, Notice, TFile} from 'obsidian';
 import HanziPracticePlugin from '../main';
 import {resolveBankSources, HanziPluginSettings} from '../settings';
 import {prettifyPinyin} from '../utils/prettify_pinyin';
+import {LogInfo} from '../telemetry/telemetry';
+import {UiClickLogger} from '../telemetry/ui_debug';
+import {describeEntry} from '../telemetry/card_debug';
 import {
   BankSource,
   entryLabel,
@@ -36,6 +39,7 @@ export class EditBankModal extends Modal {
   private settings: HanziPluginSettings;
   private listEl!: HTMLElement;
 
+  private uiClicks = new UiClickLogger('modal:edit-banks');
   constructor(app: App, plugin: HanziPracticePlugin) {
     super(app);
     this.plugin = plugin;
@@ -45,6 +49,8 @@ export class EditBankModal extends Modal {
   onOpen() {
     const {contentEl} = this;
     contentEl.empty();
+    LogInfo('Modal opened', {modal: 'edit-banks'});
+    this.uiClicks.attach(contentEl);
     contentEl.createEl('h2', {text: 'Edit Practice Banks'});
 
     this.listEl = contentEl.createDiv({cls: 'hanzi-bank-list'});
@@ -249,9 +255,20 @@ export class EditBankModal extends Modal {
     if (!(file instanceof TFile)) return;
 
     const text = await this.app.vault.read(file);
-    const remaining = parsePracticeList(text).filter(e => e.id !== entry.id);
+    const parsed = parsePracticeList(text);
+    const remaining = parsed.filter(e => e.id !== entry.id);
     const newText = remaining.map(formatPracticeEntry).join('\n');
     await this.app.vault.modify(file, newText);
+
+    // A card the user deleted is the first suspect when one "disappeared".
+    LogInfo('User action: removed a card from its bank', {
+      modal: 'edit-banks',
+      bank: source.name,
+      filePath: source.filePath,
+      cardsBefore: parsed.length,
+      cardsAfter: remaining.length,
+      ...describeEntry(entry),
+    });
 
     // Hanzi notices show pretty-tone pinyin (hǎo, not hao3); every other
     // card type uses its generic entryLabel.
@@ -265,6 +282,9 @@ export class EditBankModal extends Modal {
   }
 
   onClose() {
+    // Obsidian tears the click listener down with this component.
+    this.uiClicks.unload();
+    LogInfo('Modal closed', {modal: 'edit-banks'});
     const {contentEl} = this;
     contentEl.empty();
   }
