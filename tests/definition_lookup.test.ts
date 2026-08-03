@@ -1,5 +1,8 @@
 import {CedictParser} from '../src/dictionary/cedict_parser';
-import {lookupDefinitions} from '../src/dictionary/definition_lookup';
+import {
+  lookupDefinitions,
+  PickPrimarySense,
+} from '../src/dictionary/definition_lookup';
 
 const SAMPLE = [
   '# CC-CEDICT sample',
@@ -45,5 +48,70 @@ describe('lookupDefinitions', () => {
   test('returns an empty list for characters not in the dictionary', () => {
     expect(lookupDefinitions(makeParser(), '猫')).toEqual([]);
     expect(lookupDefinitions(makeParser(), '')).toEqual([]);
+  });
+});
+
+describe('PickPrimarySense', () => {
+  const sense = (pinyin: string, english: string) => ({
+    traditional: 'X',
+    simplified: 'X',
+    pinyin,
+    english,
+  });
+
+  it('skips a surname sense — the real CEDICT order for 车', () => {
+    // 車 车 [Che1] /surname Che/ comes FIRST in the dictionary file.
+    expect(
+      PickPrimarySense([
+        sense('Che1', 'surname Che'),
+        sense('che1', 'car/vehicle/CL:輛|辆[liang4]'),
+        sense('ju1', 'war chariot (archaic)'),
+      ]),
+    ).toMatchObject({pinyin: 'che1'});
+  });
+
+  it('skips colloquial and cross-reference senses — the real order for 吗', () => {
+    expect(
+      PickPrimarySense([
+        sense('ma2', '(coll.) what?'),
+        sense('ma3', 'used in 嗎啡|吗啡[ma3fei1]'),
+        sense('ma5', '(question particle for "yes-no" questions)'),
+      ]),
+    ).toMatchObject({pinyin: 'ma5'});
+  });
+
+  it('skips a "used in" sense — the real order for 个', () => {
+    expect(
+      PickPrimarySense([
+        sense('ge3', 'used in 自個兒|自个儿[zi4 ge3 r5]'),
+        sense('ge4', '(classifier used before a noun...)'),
+      ]),
+    ).toMatchObject({pinyin: 'ge4'});
+  });
+
+  it('leaves an ordinary character on its first sense', () => {
+    expect(
+      PickPrimarySense([
+        sense('hao3', 'good/appropriate; proper'),
+        sense('hao4', 'to be fond of'),
+      ]),
+    ).toMatchObject({pinyin: 'hao3'});
+    expect(PickPrimarySense([sense('wo3', 'I; me; my')])).toMatchObject({
+      pinyin: 'wo3',
+    });
+  });
+
+  it('falls back to the first sense when every sense is marked', () => {
+    // A character whose only reading is a surname still deserves a reading.
+    expect(
+      PickPrimarySense([
+        sense('Zhao4', 'surname Zhao'),
+        sense('Qian2', 'surname Qian'),
+      ]),
+    ).toMatchObject({pinyin: 'Zhao4'});
+  });
+
+  it('has nothing to pick from an empty list', () => {
+    expect(PickPrimarySense([])).toBeUndefined();
   });
 });

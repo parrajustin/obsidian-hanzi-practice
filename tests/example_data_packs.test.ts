@@ -20,6 +20,7 @@ import {
 import {parseDataPack} from '../src/utils/data_pack';
 import {
   CardType,
+  CHARACTER_BANK,
   HANZI_BANK,
   parsePracticeList,
 } from '../src/utils/practice_list';
@@ -109,7 +110,8 @@ describe('installing the example packs through the settings file picker', () => 
     noticeMessages.length = 0;
     (FileUtil.writeToFile as jest.Mock).mockResolvedValue(Ok(undefined));
     settings = {
-      version: 2,
+      version: 3,
+      characterFilePath: 'hanzi-character-progress.md',
       historyFilePath: 'hanzi-practice-history.md',
       practiceFilePath: 'hanzi-practice-words.md',
       banks: [],
@@ -188,7 +190,8 @@ describe('resolving banks from registered example packs', () => {
     'a registered $file contributes its banks at resolution time',
     async ({file, banks}) => {
       const {sources, packErrors} = await resolveBankSources(new App(), {
-        version: 2,
+        version: 3,
+        characterFilePath: 'hanzi-character-progress.md',
         historyFilePath: 'hanzi-practice-history.md',
         practiceFilePath: 'hanzi-practice-words.md',
         banks: [],
@@ -197,6 +200,8 @@ describe('resolving banks from registered example packs', () => {
       expect(packErrors).toEqual([]);
       expect(sources.map(s => s.name)).toEqual([
         HANZI_BANK,
+        // The generated character ledger resolves as a bank too.
+        CHARACTER_BANK,
         ...banks.map(([name]) => name),
       ]);
     },

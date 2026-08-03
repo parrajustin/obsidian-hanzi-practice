@@ -4,6 +4,8 @@
  * same SM-2-style scheduler as the hanzi quiz (0–5; <3 counts as a fail and
  * the card comes back today).
  */
+import {AnnotationLookup, renderAnnotatedText} from './annotated_text';
+
 export interface FlashcardGrade {
   label: string;
   score: number;
@@ -18,6 +20,8 @@ export const FLASHCARD_GRADES: FlashcardGrade[] = [
 ];
 
 export class FlashCard {
+  /** Per-character readings for the prompt/answer (see annotated_text.ts). */
+  private annotate: AnnotationLookup | undefined;
   private container: HTMLElement;
   private front: string;
   private back: string;
@@ -34,7 +38,9 @@ export class FlashCard {
     onGrade: (score: number) => void,
     explanation = '',
     onFlip: () => void = () => {},
+    annotate?: AnnotationLookup,
   ) {
+    this.annotate = annotate;
     this.container = container;
     this.front = front;
     this.back = back;
@@ -56,7 +62,12 @@ export class FlashCard {
     card.style.justifyContent = 'center';
     card.style.gap = '16px';
 
-    const frontEl = card.createDiv({cls: 'flash-card-front', text: this.front});
+    const frontEl = renderAnnotatedText(
+      card,
+      this.front,
+      this.annotate,
+      'flash-card-front',
+    );
     frontEl.style.fontSize = '1.4em';
     frontEl.style.textAlign = 'center';
     frontEl.style.whiteSpace = 'pre-wrap';
@@ -66,7 +77,12 @@ export class FlashCard {
     const divider = card.createEl('hr', {cls: 'flash-card-divider'});
     divider.style.display = 'none';
     divider.style.width = '100%';
-    const backEl = card.createDiv({cls: 'flash-card-back', text: this.back});
+    const backEl = renderAnnotatedText(
+      card,
+      this.back,
+      this.annotate,
+      'flash-card-back',
+    );
     backEl.style.display = 'none';
     backEl.style.fontSize = '1.2em';
     backEl.style.textAlign = 'center';

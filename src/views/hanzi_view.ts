@@ -33,8 +33,17 @@ import {
   Span,
 } from '../telemetry/telemetry';
 import {describeEntry} from '../telemetry/card_debug';
+import {CharacterIndex, LoadCharacterIndex} from '../utils/character_ledger';
+import {AnnotationLookup} from '../components/annotated_text';
 import {LogUiClick} from '../telemetry/ui_debug';
-import {RecordCardGraded} from '../telemetry/metrics';
+import {
+  RecordCardGraded,
+  RecordCharacterLevelUp,
+  RecordCharactersCredited,
+  RecordCharactersKnown,
+  RecordNoIdea,
+} from '../telemetry/metrics';
+import {KNOWN_LEVEL} from '../character_progress';
 import {WrapToResult} from 'standard-ts-lib/src/wrap_to_result';
 import {WrapPromise} from 'standard-ts-lib/src/wrap_promise';
 
@@ -82,6 +91,11 @@ export class HanziPracticeView extends ItemView {
   private toneDone = false;
   /** Completion-page timers (fade + advance); cleared on re-render/close. */
   private advanceTimers: number[] = [];
+  /**
+   * Readings + levels for every tracked character, reloaded with each card so
+   * a character that just levelled up loses its pinyin on the very next card.
+   */
+  private characters: CharacterIndex = new Map();
   /** Session tallies, reported when the leaf closes. */
   private sessionStartedAt: number | null = null;
   private cardsShown = 0;
@@ -251,6 +265,27 @@ export class HanziPracticeView extends ItemView {
       })),
       brokenDataPacks: packErrors.map(packError => packError.filePath),
     });
+    const history = await HistoryManager.parseHistory(
+      this.plugin.app,
+      this.plugin.settings.historyFilePath,
+    );
+    // The reading source for card annotations. Read from the generated ledger
+    // (small) rather than CEDICT (10MB): the practice view never loads the
+    // dictionary — see the plugin's enrich-on-write rule.
+    this.characters = await LoadCharacterIndex(
+      this.plugin.app,
+      this.plugin.settings.characterFilePath,
+      entry => HistoryManager.reviewsForEntry(history, entry),
+    );
+    const known = [...this.characters.values()].filter(
+      character => character.level >= KNOWN_LEVEL,
+    ).length;
+    LogDebug('Character readings loaded for annotation', {
+      tracked: this.characters.size,
+      known,
+      filePath: this.plugin.settings.characterFilePath,
+    });
+    RecordCharactersKnown(known, this.characters.size);
     const nextEntry = await HistoryManager.getNextDueEntry(
       this.plugin.app,
       this.plugin.settings.historyFilePath,
@@ -460,6 +495,7 @@ export class HanziPracticeView extends ItemView {
           secondsThinking: this.secondsOnCard(),
           ...describeEntry(entry),
         }),
+      this.annotation(),
     );
     card.render();
   }
@@ -481,6 +517,8 @@ export class HanziPracticeView extends ItemView {
       {
         explanation: entry.explanation,
         onPick: pick => this.logOptionPick('multi-choice', entry, pick),
+        onNoIdea: () => this.handleNoIdea('multi-choice', entry),
+        annotate: this.annotation(),
       },
     );
     card.render();
@@ -505,6 +543,7 @@ export class HanziPracticeView extends ItemView {
           secondsThinking: this.secondsOnCard(),
           ...describeEntry(entry),
         }),
+      this.annotation(),
     );
     card.render();
   }
@@ -528,6 +567,8 @@ export class HanziPracticeView extends ItemView {
         prompt: 'Is this correct?',
         explanation: entry.explanation,
         onPick: pick => this.logOptionPick('true-false', entry, pick),
+        onNoIdea: () => this.handleNoIdea('true-false', entry),
+        annotate: this.annotation(),
       },
     );
     card.render();
@@ -544,6 +585,16 @@ export class HanziPracticeView extends ItemView {
    * card's identity and format, and how long the previous card was up. This
    * is the backbone of the debug trail — "what was I looking at, exactly".
    */
+  /**
+   * The reading to print above each character of a card. Undefined when the
+   * ledger is empty (no sync yet) so cards render exactly as they did before
+   * annotations existed rather than sprouting empty lines.
+   */
+  private annotation(): AnnotationLookup | undefined {
+    if (this.characters.size === 0) return undefined;
+    return char => this.characters.get(char);
+  }
+
   /** How long the current card has been on screen, for user-action logs. */
   private secondsOnCard(): number | undefined {
     if (this.cardShownAt === null) return undefined;
@@ -583,6 +634,22 @@ export class HanziPracticeView extends ItemView {
       ...describeEntry(entry),
       ...extra,
     });
+  }
+
+  /**
+   * "No Idea" on an auto-graded card: score 0 without guessing. Logged as its
+   * own action because a 0 the user CHOSE is different evidence from a 0 they
+   * earned by picking wrong — one says "never seen it", the other "confused
+   * it with something".
+   */
+  private handleNoIdea(renderer: string, entry: PracticeEntry) {
+    LogInfo('User action: No Idea (declined to guess)', {
+      renderer,
+      secondsThinking: this.secondsOnCard(),
+      ...describeEntry(entry),
+    });
+    RecordNoIdea(String(entry.cardType ?? CardType.HANZI), entry.bank);
+    this.gradeCard(entry, 0);
   }
 
   private gradeCard(entry: PracticeEntry, score: number) {
@@ -639,6 +706,30 @@ export class HanziPracticeView extends ItemView {
       entry,
       score,
     );
+    // Answering a sentence is evidence about the characters in it, not just
+    // about the card: this is what walks a character towards level 4 (and
+    // towards losing its printed reading) without ever drilling it alone.
+    const credit = await HistoryManager.creditCharacters(
+      this.plugin.app,
+      this.plugin.settings.historyFilePath,
+      entry,
+      score,
+      this.characters,
+    );
+    RecordCharactersCredited(
+      String(entry.cardType ?? CardType.HANZI),
+      credit.credited.length,
+    );
+    for (const char of credit.levelUps) {
+      // The moment a card visibly changes for the user — worth its own line.
+      LogInfo('Character reached the known level; its pinyin is now hidden', {
+        character: char,
+        knownLevel: KNOWN_LEVEL,
+        fromCard: entry.id,
+        score,
+      });
+      RecordCharacterLevelUp(char);
+    }
     // Keep the daily-volume gauge honest without re-reading history on every
     // metric collection. Best-effort and un-awaited: this is telemetry
     // bookkeeping, so neither a slow read nor a missing method may delay or

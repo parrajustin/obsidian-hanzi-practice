@@ -57,6 +57,13 @@ export enum CardType {
 export const HANZI_BANK = 'Hanzi';
 
 /**
+ * The generated character-progress bank (see utils/character_ledger.ts): one
+ * hanzi card per character any study card teaches. Reserved like `Hanzi` —
+ * the ledger owns this bank and rewrites it on every sync.
+ */
+export const CHARACTER_BANK = 'Characters';
+
+/**
  * One place cards are stored: a bank name + the vault file holding its lines.
  * Each bank has its own file (the Hanzi bank's file is the plugin's
  * `practiceFilePath` setting; other banks are configured in settings).
@@ -273,6 +280,10 @@ export function parsePracticeList(text: string): PracticeEntry[] {
   for (const raw of text.split('\n')) {
     const line = raw.replace(/\r$/, '');
     if (!line.trim()) continue;
+    // Markdown scaffolding, not cards: the generated character ledger opens
+    // with a heading, an HTML comment and a progress table. A real card line
+    // never starts with these (a hanzi card's first field is one character).
+    if (/^\s*(#|\||<!--|-->|>)/.test(line)) continue;
     const parts = line.split(FIELD_SEP);
     const f0 = parts[0].trim();
     if (f0.length === 0) continue;

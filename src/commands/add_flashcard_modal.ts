@@ -11,6 +11,7 @@ import {
   computeFlashcardId,
   computeMultiChoiceId,
   computeTrueFalseId,
+  CHARACTER_BANK,
   formatPracticeEntry,
   HANZI_BANK,
   parseClozeSegments,
@@ -90,7 +91,12 @@ export class AddFlashcardModal extends Modal {
     contentEl.createEl('h2', {text: 'Add Card'});
 
     const resolved = await resolveBankSources(this.app, this.settings);
-    const banks = resolved.sources.filter(s => s.name !== HANZI_BANK);
+    // Neither GENERATED bank is a place to hand-write a card: Hanzi cards go
+    // through the add-character modal, and anything added to the character
+    // ledger would be overwritten by the next sync.
+    const banks = resolved.sources.filter(
+      s => s.name !== HANZI_BANK && s.name !== CHARACTER_BANK,
+    );
     if (banks.length === 0) {
       contentEl.createEl('p', {
         cls: 'flash-no-banks',

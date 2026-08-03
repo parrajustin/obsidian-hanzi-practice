@@ -4,6 +4,12 @@ Obsidian plugin that is a general spaced-repetition practice platform (Anki-styl
 practice item is a **card** with a **card type** (how it is practiced) belonging to a **bank**
 (a named cluster of cards practiced together; the `practice` command picks one). Card types:
 
+Every card's Chinese is annotated with **per-character readings** taken from the generated
+character ledger, and each character's reading disappears once that character reaches level 4
+(see `src/character_progress.ts`). Grading any card also credits every character in it, so
+sentences teach characters. Auto-graded cards (multiple choice, true/false) carry a **No Idea**
+button that scores 0 without a guess.
+
 - **0 = hanzi** (the original & richest type; always in the `Hanzi` bank): draw strokes with
   the plugin's own minimal quiz writer (`src/writer/`, graded against a shipped stroke
   database of medians + glyph outlines — no hanzi-writer, no CDN) and pick the correct
@@ -42,7 +48,10 @@ hotkeys/history.
 - `src/main.ts` — plugin entry. Registers the `HanziPracticeView` + five commands
   (`open-hanzi-practice`, `practice` (choose-bank modal), `add-hanzi-character`,
   `add-flash-card`, `edit-hanzi-bank` — the last id kept for hotkey compat, it now edits ALL
-  banks). `activateView(banks: string | string[])` opens the practice tab in the
+  banks — plus `sync-character-progress` (`runCharacterSync`: the ONE path that reads CEDICT
+  outside the add-character modal, rebuilding the ledger from every bank) and
+  `strip-embedded-pinyin` (`runPinyinMigration`: strips `pīnyīn — ` prefixes from every card
+  file, then re-syncs so the readings the cards lost are available from the ledger)). `activateView(banks: string | string[])` opens the practice tab in the
   **center** pane via `workspace.getLeaf('tab')` (reusing an existing practice leaf if
   present) and ALWAYS calls `setViewState` (`state: {bank}` for one bank, `{banks}` for a
   multi-select) so an open tab switches bank(s).
@@ -273,6 +282,32 @@ hotkeys/history.
   (pure/non-mutating) merges pack banks by name (add / re-point path / unchanged; the
   reserved name `Hanzi` is skipped). User-facing format doc: `CARD_FORMATS.md` (card line
   format per type, bank loading, data packs — keep it in sync with format changes).
+- `src/character_progress.ts` — the LEVEL model: a character's level is the rounded
+  mean of its reviews, but capped below `KNOWN_LEVEL` (4) until it has at least
+  `MIN_REVIEWS_TO_PROMOTE` (3) of them, so one lucky sentence cannot strip a reading the
+  reader still needs. `ShouldShowPinyin(level)` is what the renderer gates on;
+  `CrossesKnownThreshold(before, after)` is the level-up event (logged + counted).
+- `src/utils/hanzi_text.ts` — pure text rules: `IsHanziChar`/`ExtractHanzi`/
+  `SplitForAnnotation`, plus `StripEmbeddedPinyin`, which removes a `pīnyīn — ` prefix ONLY
+  when the prefix has no hanzi, is pinyin-legal and carries a tone mark (so
+  `Paris — capital of France` survives).
+- `src/utils/character_ledger.ts` — the generated **character ledger**
+  (`settings.characterFilePath`, default `hanzi-character-progress.md`). One file doing three
+  jobs: the reading source cards are annotated from (so the practice view still never loads
+  CEDICT), a practiceable bank (`CHARACTER_BANK` = `Characters`, resolved right after Hanzi),
+  and a human-readable progress note (a markdown table above the card lines; the parser skips
+  `#`/`|`/`<!--` lines). `SyncCharacterLedger` looks up only NEW characters and preserves
+  existing lines verbatim — the id column is what keeps a character's history attached, and a
+  hand-edited definition survives a re-sync. Characters whose cards were deleted are kept, not
+  dropped. Levels are never stored, always derived from history.
+- `src/utils/migrate_pinyin.ts` — `StripPinyinFromCardFile`, the line-level rewrite behind the
+  `strip-embedded-pinyin` command. Splits fields, strips the text fields, writes everything
+  else back byte-for-byte (id, type, bank, explanation), and is idempotent.
+- `src/components/annotated_text.ts` — ruby rendering. Each hanzi gets a reading line above
+  it; the line is ALWAYS created (empty for a known character) so learning a character never
+  reflows the card. Text with no hanzi renders as plain text — English decks look exactly as
+  before. `data-text` on the container carries the raw text, because `textContent` on an
+  annotated element interleaves readings with characters (tests and the E2E read `data-text`).
 - `src/telemetry/` — the debug trail a bug report is read from. `telemetry.ts` is the front
   door over the **Bug Collector** plugin (`obsidian-bug-collector`, a `file:` sibling dep):
   `InitTelemetry` registers this plugin, `LogInfo/LogDebug/LogWarn/LogError` are the ONLY

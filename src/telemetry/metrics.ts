@@ -25,6 +25,10 @@ interface Instruments {
   cardScore: Histogram;
   cardDuration: Histogram;
   cardsPerDay: Histogram;
+  charactersCredited: Counter;
+  characterLevelUps: Counter;
+  charactersKnown: Histogram;
+  noIdea: Counter;
 }
 
 let instruments: Optional<Instruments> = None;
@@ -56,6 +60,27 @@ function getInstruments(): Optional<Instruments> {
         description: 'Cards practiced in a day, sampled at each session start',
         unit: 'cards',
         advice: {explicitBucketBoundaries: CARDS_PER_DAY_BUCKETS},
+      }),
+      charactersCredited: meter.createCounter('hanzi.characters_credited', {
+        description:
+          'Characters credited with a score because a card containing them ' +
+          'was graded',
+        unit: 'characters',
+      }),
+      characterLevelUps: meter.createCounter('hanzi.character_level_ups', {
+        description:
+          'Characters that crossed the known threshold, so their pinyin is ' +
+          'no longer printed on cards',
+        unit: 'characters',
+      }),
+      charactersKnown: meter.createHistogram('hanzi.characters_known', {
+        description:
+          'Characters at or above the known level, sampled when a card loads',
+        unit: 'characters',
+      }),
+      noIdea: meter.createCounter('hanzi.no_idea', {
+        description: 'Cards ended with "No Idea" instead of a guess',
+        unit: 'cards',
       }),
     };
   }, /*textForUnknown=*/ 'Failed to create metric instruments');
@@ -109,6 +134,42 @@ export function RecordCardsPerDay(count: number): void {
   const built = getInstruments();
   if (built.none) return;
   built.safeValue().cardsPerDay.record(count);
+}
+
+/**
+ * Characters credited by one graded card (0 when the card has no tracked
+ * characters). The counter answers "is sentence practice actually moving the
+ * character levels, or only the card schedule?".
+ */
+export function RecordCharactersCredited(
+  cardType: string,
+  count: number,
+): void {
+  if (count <= 0) return;
+  const built = getInstruments();
+  if (built.none) return;
+  built.safeValue().charactersCredited.add(count, {card_type: cardType});
+}
+
+/** One character crossed the known threshold — its readings stop printing. */
+export function RecordCharacterLevelUp(character: string): void {
+  const built = getInstruments();
+  if (built.none) return;
+  built.safeValue().characterLevelUps.add(1, {character});
+}
+
+/** How much of the tracked set is known, sampled whenever a card loads. */
+export function RecordCharactersKnown(known: number, tracked: number): void {
+  const built = getInstruments();
+  if (built.none) return;
+  built.safeValue().charactersKnown.record(known, {tracked});
+}
+
+/** A card the user declined to guess at. */
+export function RecordNoIdea(cardType: string, bank: string): void {
+  const built = getInstruments();
+  if (built.none) return;
+  built.safeValue().noIdea.add(1, {card_type: cardType, bank});
 }
 
 /**

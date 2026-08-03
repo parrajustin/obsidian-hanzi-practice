@@ -10,7 +10,8 @@ import {
 } from '../src/utils/practice_list';
 import {App} from 'obsidian';
 import {FileUtil} from 'standard-obsidian-lib/src/filesystem/file_util';
-import {Ok} from 'standard-ts-lib/src/result';
+import {Err, Ok} from 'standard-ts-lib/src/result';
+import {NotFoundError} from 'standard-ts-lib/src/status_error';
 import {TextEncoder, TextDecoder} from 'util';
 import {InitTelemetry, ResetTelemetry} from '../src/telemetry/telemetry';
 
@@ -629,5 +630,119 @@ describe('HistoryManager', () => {
     );
 
     expect(nextEntry?.id).toBe(HAO3_ID);
+  });
+});
+
+describe('crediting the characters of a graded card', () => {
+  const mockApp = new App();
+  const index = new Map([
+    ['开', {id: 'aaaa1111', character: '开'}],
+    ['车', {id: 'bbbb2222', character: '车'}],
+  ]);
+  const sentence = {
+    id: 'card-1',
+    cardType: CardType.FLASHCARD,
+    bank: 'L2 Words',
+    front: '开车',
+    back: 'to drive',
+  } as const;
+
+  let written: string;
+  beforeEach(() => {
+    written = '';
+    (FileUtil.fetchFile as jest.Mock).mockImplementation(() =>
+      Promise.resolve(Ok(new TextEncoder().encode(written))),
+    );
+    (FileUtil.writeToFile as jest.Mock).mockImplementation(
+      (_app: App, _path: string, data: Uint8Array) => {
+        written = new TextDecoder().decode(data);
+        return Promise.resolve(Ok(undefined));
+      },
+    );
+  });
+
+  it('writes one review per character, keyed by the LEDGER id', async () => {
+    const result = await HistoryManager.creditCharacters(
+      mockApp,
+      'history.md',
+      sentence,
+      4,
+      index,
+    );
+
+    expect(result.credited).toEqual(['开', '车']);
+    expect(written).toContain('aaaa1111 开 (via card card-1): 4');
+    expect(written).toContain('bbbb2222 车 (via card card-1): 4');
+    // Parsed back, the credit is a review of the CHARACTER.
+    const history = HistoryManager.parseHistoryText(written);
+    expect(history['aaaa1111']).toEqual([
+      {timestamp: expect.any(Number), difficulty: 4},
+    ]);
+  });
+
+  it('writes them in a single pass, not one file write per character', async () => {
+    await HistoryManager.creditCharacters(
+      mockApp,
+      'history.md',
+      sentence,
+      5,
+      index,
+    );
+    expect((FileUtil.writeToFile as jest.Mock).mock.calls).toHaveLength(1);
+  });
+
+  it('skips characters the ledger does not track, and says which', async () => {
+    const result = await HistoryManager.creditCharacters(
+      mockApp,
+      'history.md',
+      {...sentence, front: '开车马'},
+      3,
+      index,
+    );
+    expect(result.credited).toEqual(['开', '车']);
+    expect(result.untracked).toEqual(['马']);
+    expect(written).not.toContain('马');
+  });
+
+  it('reports the characters whose pinyin disappears on THIS grade', async () => {
+    // Two prior credits each; the third crosses the threshold.
+    written =
+      '- [1] aaaa1111 开: 5\n- [2] aaaa1111 开: 5\n- [3] bbbb2222 车: 1\n- [4] bbbb2222 车: 1';
+    const result = await HistoryManager.creditCharacters(
+      mockApp,
+      'history.md',
+      sentence,
+      5,
+      index,
+    );
+    // 开 reaches avg 5 over 3 reviews -> known. 车 is nowhere near.
+    expect(result.levelUps).toEqual(['开']);
+  });
+
+  it('does nothing at all for a card with no Chinese in it', async () => {
+    const result = await HistoryManager.creditCharacters(
+      mockApp,
+      'history.md',
+      {...sentence, front: 'France', back: 'Paris'},
+      5,
+      index,
+    );
+    expect(result).toEqual({credited: [], untracked: [], levelUps: []});
+    expect(FileUtil.writeToFile).not.toHaveBeenCalled();
+  });
+
+  it('reports nothing credited when the write fails', async () => {
+    (FileUtil.writeToFile as jest.Mock).mockResolvedValue(
+      Err(NotFoundError('read-only vault')),
+    );
+    const result = await HistoryManager.creditCharacters(
+      mockApp,
+      'history.md',
+      sentence,
+      5,
+      index,
+    );
+    expect(result.credited).toEqual([]);
+    expect(result.levelUps).toEqual([]);
   });
 });

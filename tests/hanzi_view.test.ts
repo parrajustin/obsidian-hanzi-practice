@@ -7,7 +7,39 @@ import {HanziPracticeView} from '../src/views/hanzi_view';
 import {HistoryManager} from '../src/utils/history_manager';
 import {CardType, PracticeEntry} from '../src/utils/practice_list';
 
+// The view loads character readings through the ledger module; these tests
+// drive that index directly rather than staging a vault file.
+jest.mock('../src/utils/character_ledger', () => ({
+  ...jest.requireActual('../src/utils/character_ledger'),
+  LoadCharacterIndex: jest.fn().mockResolvedValue(new Map()),
+}));
+
+const characterLedger = require('../src/utils/character_ledger');
+
 const flush = () => new Promise(resolve => setTimeout(resolve, 0));
+
+/** Make the view see these characters as tracked, at these levels. */
+const withCharacters = (
+  chars: Record<string, {prettyPinyin: string; level: number; id?: string}>,
+) => {
+  const index = new Map(
+    Object.entries(chars).map(([character, info]) => [
+      character,
+      {
+        character,
+        pinyin: info.prettyPinyin,
+        prettyPinyin: info.prettyPinyin,
+        english: '',
+        id: info.id ?? `id-${character}`,
+        level: info.level,
+        reviewCount: 3,
+        averageScore: info.level,
+      },
+    ]),
+  );
+  (characterLedger.LoadCharacterIndex as jest.Mock).mockResolvedValue(index);
+  return index;
+};
 
 const FLASH: PracticeEntry = {
   id: 'aaaaaaaa',
@@ -67,11 +99,12 @@ describe('HanziPracticeView', () => {
     const plugin = {
       app: new App(),
       settings: {
-        version: 2,
+        version: 3,
         historyFilePath: 'history.md',
         practiceFilePath: 'words.md',
         banks: [],
         dataPacks: [],
+        characterFilePath: 'chars.md',
       },
       // No stroke database in unit tests — the view must degrade to the
       // .hanzi-no-stroke-data message instead of constructing a quiz writer.
@@ -584,6 +617,151 @@ describe('HanziPracticeView', () => {
       finishStrokes();
       await jest.advanceTimersByTimeAsync(0);
       expect(appendResult).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('per-character readings on rendered cards', () => {
+    const CHINESE_CARD: PracticeEntry = {
+      id: 'cccc1111',
+      cardType: CardType.FLASHCARD,
+      bank: 'L2 Words',
+      front: '开车',
+      back: 'to drive',
+    };
+
+    afterEach(() => {
+      (characterLedger.LoadCharacterIndex as jest.Mock).mockResolvedValue(
+        new Map(),
+      );
+    });
+
+    it('prints the reading above a character that is still being learned', async () => {
+      withCharacters({
+        开: {prettyPinyin: 'kāi', level: 1},
+        车: {prettyPinyin: 'chē', level: 2},
+      });
+      await openWith(CHINESE_CARD, 'L2 Words');
+
+      const readings = Array.from(
+        content().querySelectorAll('.hanzi-annotated-pinyin'),
+      ).map(el => el.textContent);
+      expect(readings).toEqual(['kāi', 'chē']);
+    });
+
+    it('drops the reading of a character that reached the known level', async () => {
+      withCharacters({
+        开: {prettyPinyin: 'kāi', level: 1},
+        车: {prettyPinyin: 'chē', level: 4},
+      });
+      await openWith(CHINESE_CARD, 'L2 Words');
+
+      const units = Array.from(
+        content().querySelectorAll<HTMLElement>('.hanzi-annotated-unit'),
+      );
+      expect(units.map(u => u.dataset.char)).toEqual(['开', '车']);
+      // The line is still there (reserved), it is just empty for 车.
+      expect(
+        units.map(u => u.querySelector('.hanzi-annotated-pinyin')?.textContent),
+      ).toEqual(['kāi', '']);
+    });
+
+    it('renders plain text when nothing has been synced yet', async () => {
+      await openWith(CHINESE_CARD, 'L2 Words');
+      expect(content().querySelector('.hanzi-annotated-unit')).toBeNull();
+      expect(content().querySelector('.flash-card-front')?.textContent).toBe(
+        '开车',
+      );
+    });
+  });
+
+  describe('grading credits the characters in the card', () => {
+    const CHINESE_CARD: PracticeEntry = {
+      id: 'cccc2222',
+      cardType: CardType.FLASHCARD,
+      bank: 'L2 Words',
+      front: '开车',
+      back: 'to drive',
+    };
+
+    it('passes the graded score and the ledger index to the credit path', async () => {
+      const index = withCharacters({
+        开: {prettyPinyin: 'kāi', level: 1},
+        车: {prettyPinyin: 'chē', level: 1},
+      });
+      const credit = jest
+        .spyOn(HistoryManager, 'creditCharacters')
+        .mockResolvedValue({
+          credited: ['开', '车'],
+          untracked: [],
+          levelUps: [],
+        });
+
+      await openWith(CHINESE_CARD, 'L2 Words');
+      await view.handleCardGrade(CHINESE_CARD, 4);
+      await flush();
+
+      expect(credit).toHaveBeenCalledWith(
+        expect.anything(),
+        'history.md',
+        CHINESE_CARD,
+        4,
+        index,
+      );
+    });
+
+    it('still grades the card when it has no characters to credit', async () => {
+      jest
+        .spyOn(HistoryManager, 'creditCharacters')
+        .mockResolvedValue({credited: [], untracked: [], levelUps: []});
+      await openWith(FLASH, 'Capitals');
+      await view.handleCardGrade(FLASH, 4);
+      await flush();
+      expect(appendResult).toHaveBeenCalledWith(
+        expect.anything(),
+        'history.md',
+        FLASH,
+        4,
+      );
+    });
+  });
+
+  describe('No Idea on auto-graded cards', () => {
+    beforeEach(() => {
+      jest
+        .spyOn(HistoryManager, 'creditCharacters')
+        .mockResolvedValue({credited: [], untracked: [], levelUps: []});
+    });
+
+    it('grades a multiple-choice card 0 without a guess', async () => {
+      await openWith(MC, 'Grammar');
+      (content().querySelector('.mc-no-idea') as HTMLElement).dispatchEvent(
+        new MouseEvent('click'),
+      );
+      await flush();
+      expect(appendResult).toHaveBeenCalledWith(
+        expect.anything(),
+        'history.md',
+        MC,
+        0,
+      );
+    });
+
+    it('grades a true/false card 0 as well', async () => {
+      // Open under real timers (the first load is deferred a tick), then fake
+      // them for the 2.5s explanation pause a failed card takes.
+      await openWith(TRUE_FALSE, 'Grammar');
+      jest.useFakeTimers();
+      (content().querySelector('.mc-no-idea') as HTMLElement).dispatchEvent(
+        new MouseEvent('click'),
+      );
+      await jest.advanceTimersByTimeAsync(3000);
+      expect(appendResult).toHaveBeenCalledWith(
+        expect.anything(),
+        'history.md',
+        TRUE_FALSE,
+        0,
+      );
+      jest.useRealTimers();
     });
   });
 });

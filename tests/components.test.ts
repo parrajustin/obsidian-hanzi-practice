@@ -319,3 +319,124 @@ describe('PinyinSelector', () => {
     expect(onComplete).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('No Idea, on cards that would otherwise force a guess', () => {
+  it('ends a multiple-choice card without picking, and reveals the answer', () => {
+    const host = document.createElement('div');
+    let completedWith: number | null = null;
+    let noIdea = 0;
+    const card = new MultiChoiceCard(
+      host,
+      '你__狗吗？',
+      '有没有',
+      ['不有'],
+      mistakes => (completedWith = mistakes),
+      {
+        explanation: '有没有 already forms the question.',
+        onNoIdea: () => noIdea++,
+      },
+    );
+    card.render();
+
+    (host.querySelector('.mc-no-idea') as HTMLElement).click();
+
+    expect(noIdea).toBe(1);
+    // NOT completed through the normal path: a declined card must never look
+    // like a clean run to the scheduler.
+    expect(completedWith).toBeNull();
+    const options = Array.from(
+      host.querySelectorAll<HTMLButtonElement>('.mc-option'),
+    );
+    expect(options.every(o => o.disabled)).toBe(true);
+    // The answer is shown — this is the card most worth reading.
+    expect(
+      (host.querySelector('.mc-explanation') as HTMLElement).style.display,
+    ).toBe('block');
+  });
+
+  it('cannot be pressed twice, or after the card is answered', () => {
+    const host = document.createElement('div');
+    let noIdea = 0;
+    const card = new MultiChoiceCard(host, 'q', 'a', ['b'], () => {}, {
+      onNoIdea: () => noIdea++,
+    });
+    card.render();
+    const button = host.querySelector('.mc-no-idea') as HTMLElement;
+    button.click();
+    button.click();
+    expect(noIdea).toBe(1);
+
+    const answered = document.createElement('div');
+    let secondNoIdea = 0;
+    const card2 = new MultiChoiceCard(answered, 'q', 'a', ['b'], () => {}, {
+      onNoIdea: () => secondNoIdea++,
+    });
+    card2.render();
+    const correct = Array.from(
+      answered.querySelectorAll<HTMLElement>('.mc-option'),
+    ).find(o => o.textContent === 'a')!;
+    correct.click();
+    (answered.querySelector('.mc-no-idea') as HTMLElement).click();
+    expect(secondNoIdea).toBe(0);
+  });
+});
+
+describe('cards annotate their Chinese with per-character readings', () => {
+  const annotate = (char: string) =>
+    ({开: {prettyPinyin: 'kāi', level: 0}})[char];
+
+  it('a flashcard front carries the reading above the character', () => {
+    const host = document.createElement('div');
+    new FlashCard(
+      host,
+      '开',
+      'to open',
+      () => {},
+      '',
+      () => {},
+      annotate,
+    ).render();
+    expect(host.querySelector('.hanzi-annotated-pinyin')?.textContent).toBe(
+      'kāi',
+    );
+    expect(
+      (host.querySelector('.flash-card-front') as HTMLElement).dataset.text,
+    ).toBe('开');
+  });
+
+  it('a cloze prompt annotates its literal text but not its blanks', () => {
+    const host = document.createElement('div');
+    new ClozeCard(
+      host,
+      '开{{车}}。',
+      'hint',
+      () => {},
+      '',
+      () => {},
+      annotate,
+    ).render();
+    const prompt = host.querySelector('.cloze-prompt') as HTMLElement;
+    // What the prompt SAYS is still exactly the blanked sentence.
+    expect(prompt.dataset.text).toBe('开____。');
+    expect(prompt.querySelector('.cloze-blank')?.textContent).toBe('____');
+    expect(prompt.querySelector('.hanzi-annotated-pinyin')?.textContent).toBe(
+      'kāi',
+    );
+  });
+
+  it('a multiple-choice question annotates, and its options stay plain', () => {
+    const host = document.createElement('div');
+    new MultiChoiceCard(host, '开', '车', ['马'], () => {}, {
+      annotate,
+    }).render();
+    expect(
+      (host.querySelector('.mc-question') as HTMLElement).dataset.text,
+    ).toBe('开');
+    const options = Array.from(
+      host.querySelectorAll<HTMLElement>('.mc-option'),
+    ).map(o => o.textContent);
+    // Options are what you choose BETWEEN; annotating them would hand over
+    // the reading of the answer.
+    expect(options.sort()).toEqual(['车', '马']);
+  });
+});

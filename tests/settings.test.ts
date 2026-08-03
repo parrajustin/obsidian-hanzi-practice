@@ -4,11 +4,12 @@ import {Err, Ok} from 'standard-ts-lib/src/result';
 import {NotFoundError} from 'standard-ts-lib/src/status_error';
 import {TextEncoder, TextDecoder} from 'util';
 import {
+  DEFAULT_CHARACTER_FILE,
   HanziPluginSettings,
   resolveBankSources,
   SETTINGS_SCHEMA,
 } from '../src/settings';
-import {HANZI_BANK} from '../src/utils/practice_list';
+import {CHARACTER_BANK, HANZI_BANK} from '../src/utils/practice_list';
 
 global.TextEncoder = TextEncoder;
 global.TextDecoder = TextDecoder as any;
@@ -16,7 +17,7 @@ global.TextDecoder = TextDecoder as any;
 jest.mock('standard-obsidian-lib/src/filesystem/file_util');
 
 describe('settings schema', () => {
-  it('migrates v0 settings all the way to v2', () => {
+  it('migrates v0 settings all the way to v3', () => {
     const res = SETTINGS_SCHEMA.updateSchema({
       version: 0,
       historyFilePath: 'h.md',
@@ -25,16 +26,17 @@ describe('settings schema', () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.val).toEqual({
-        version: 2,
+        version: 3,
         historyFilePath: 'h.md',
         practiceFilePath: 'p.md',
         banks: [],
         dataPacks: [],
+        characterFilePath: DEFAULT_CHARACTER_FILE,
       });
     }
   });
 
-  it('migrates v1 settings to v2, keeping imported banks as manual banks', () => {
+  it('migrates v1 settings to v3, keeping imported banks as manual banks', () => {
     const res = SETTINGS_SCHEMA.updateSchema({
       version: 1,
       historyFilePath: 'h.md',
@@ -44,35 +46,61 @@ describe('settings schema', () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       expect(res.val).toEqual({
-        version: 2,
+        version: 3,
         historyFilePath: 'h.md',
         practiceFilePath: 'p.md',
         banks: [{name: 'Capitals', filePath: 'capitals.md'}],
         dataPacks: [],
+        characterFilePath: DEFAULT_CHARACTER_FILE,
       });
     }
   });
 
-  it('accepts v2 settings with data packs unchanged', () => {
-    const v2 = {
+  it('migrates v2 settings to v3, keeping banks and packs', () => {
+    const res = SETTINGS_SCHEMA.updateSchema({
       version: 2,
       historyFilePath: 'h.md',
       practiceFilePath: 'p.md',
       banks: [{name: 'Capitals', filePath: 'capitals.md'}],
       dataPacks: [{filePath: 'starter-pack.json'}],
-    };
-    const res = SETTINGS_SCHEMA.updateSchema(v2);
+    });
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.val).toEqual(v2);
+    if (res.ok) {
+      expect(res.val).toEqual({
+        version: 3,
+        historyFilePath: 'h.md',
+        practiceFilePath: 'p.md',
+        banks: [{name: 'Capitals', filePath: 'capitals.md'}],
+        dataPacks: [{filePath: 'starter-pack.json'}],
+        // Generated, so an existing config just gets the default path; the
+        // file itself appears at the first sync.
+        characterFilePath: DEFAULT_CHARACTER_FILE,
+      });
+    }
   });
 
-  it('default settings are v2 with no banks and no packs', () => {
+  it('accepts v3 settings unchanged', () => {
+    const v3 = {
+      version: 3,
+      historyFilePath: 'h.md',
+      practiceFilePath: 'p.md',
+      banks: [],
+      dataPacks: [],
+      characterFilePath: 'chars.md',
+    };
+    const res = SETTINGS_SCHEMA.updateSchema(v3);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.val).toEqual(v3);
+  });
+
+  it('default settings are v3 with no banks, no packs and a ledger path', () => {
     const res = SETTINGS_SCHEMA.getDefault();
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.val.version).toBe(2);
+      expect(res.val.version).toBe(3);
       expect(res.val.banks).toEqual([]);
       expect(res.val.dataPacks).toEqual([]);
+      expect(res.val.characterFilePath).toBe(DEFAULT_CHARACTER_FILE);
     }
   });
 });
@@ -82,11 +110,14 @@ describe('resolveBankSources', () => {
     banks: HanziPluginSettings['banks'],
     dataPacks: HanziPluginSettings['dataPacks'],
   ): HanziPluginSettings => ({
-    version: 2,
+    version: 3,
     historyFilePath: 'h.md',
     practiceFilePath: 'hanzi.md',
     banks,
     dataPacks,
+    // Off by default in these fixtures so the bank-ordering assertions stay
+    // about packs; the ledger bank has its own test.
+    characterFilePath: '',
   });
 
   const packJson = (banks: {name: string; filePath: string}[]) =>
@@ -112,6 +143,20 @@ describe('resolveBankSources', () => {
     ]);
     expect(packErrors).toEqual([]);
     expect(FileUtil.fetchFile).not.toHaveBeenCalled();
+  });
+
+  it('resolves the generated character ledger as a practiceable bank', async () => {
+    const {sources} = await resolveBankSources(new App(), {
+      ...makeSettings([{name: 'Capitals', filePath: 'capitals.md'}], []),
+      characterFilePath: 'hanzi-character-progress.md',
+    });
+    // Right after Hanzi, before the user's own banks: it is generated, not
+    // configured, and the practice modal lists it in this order.
+    expect(sources).toEqual([
+      {name: HANZI_BANK, filePath: 'hanzi.md'},
+      {name: CHARACTER_BANK, filePath: 'hanzi-character-progress.md'},
+      {name: 'Capitals', filePath: 'capitals.md'},
+    ]);
   });
 
   it("re-reads each registered pack's JSON and appends its banks", async () => {

@@ -22,11 +22,13 @@ describe('AddFlashcardModal', () => {
     const plugin = {
       app,
       settings: {
-        version: 2,
+        version: 3,
         historyFilePath: 'history.md',
         practiceFilePath: 'words.md',
         banks,
         dataPacks: [],
+        // The generated ledger resolves as a bank; the modal must not offer it.
+        characterFilePath: 'chars.md',
       },
     } as never;
     modal = new AddFlashcardModal(app, plugin);
@@ -63,6 +65,16 @@ describe('AddFlashcardModal', () => {
 
   beforeEach(() => {
     noticeMessages.length = 0;
+  });
+
+  it('never offers a GENERATED bank as a destination', async () => {
+    // Hanzi cards are added through the add-character modal, and anything
+    // written into the character ledger would be erased by the next sync.
+    await makeModal([{name: 'Capitals', filePath: 'capitals.md'}]);
+    const options = Array.from(
+      modal.contentEl.querySelectorAll('.flash-bank-dropdown option'),
+    ).map(o => o.textContent);
+    expect(options).toEqual(['Capitals']);
   });
 
   it('shows a pointer to Settings when no banks are configured', async () => {

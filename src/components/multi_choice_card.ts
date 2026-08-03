@@ -1,3 +1,5 @@
+import {AnnotationLookup, renderAnnotatedText} from './annotated_text';
+
 /** Optional extras used by card types that reuse this component. */
 export interface MultiChoiceCardOptions {
   /** Small muted line above the question, e.g. "Is this correct?". */
@@ -12,6 +14,15 @@ export interface MultiChoiceCardOptions {
    * which options were tried before the right one.
    */
   onPick?: (pick: {option: string; correct: boolean; mistakes: number}) => void;
+  /**
+   * Pressed "No Idea": the card is over and scores 0, WITHOUT a guess. With
+   * only a handful of options a guess has a real chance of landing on the
+   * answer and telling the scheduler a lie — this is the honest way out, and
+   * every card type offers it (flashcards and cloze have it as a grade).
+   */
+  onNoIdea?: () => void;
+  /** Per-character readings for the question (see annotated_text.ts). */
+  annotate?: AnnotationLookup;
 }
 
 /**
@@ -72,10 +83,12 @@ export class MultiChoiceCard {
       promptEl.style.color = 'var(--text-muted)';
     }
 
-    const questionEl = card.createDiv({
-      cls: 'mc-question',
-      text: this.question,
-    });
+    const questionEl = renderAnnotatedText(
+      card,
+      this.question,
+      this.options.annotate,
+      'mc-question',
+    );
     questionEl.style.fontSize = '1.4em';
     questionEl.style.textAlign = 'center';
     questionEl.style.whiteSpace = 'pre-wrap';
@@ -145,5 +158,32 @@ export class MultiChoiceCard {
         }
       };
     }
+
+    // Always last, and apart from the options: it is not one of the answers,
+    // it is the way to decline to guess.
+    const noIdeaBtn = card.createEl('button', {
+      cls: 'mc-no-idea',
+      text: 'No Idea',
+    });
+    noIdeaBtn.type = 'button';
+    noIdeaBtn.style.marginTop = '8px';
+    noIdeaBtn.style.alignSelf = 'center';
+    noIdeaBtn.onclick = () => {
+      if (this.completed) return;
+      this.completed = true;
+      // Reveal: a card you could not answer is exactly the one whose
+      // correction is worth reading.
+      for (const button of this.buttons) {
+        button.disabled = true;
+        if (button.textContent === this.answer) {
+          button.style.backgroundColor = '#4caf50';
+          button.style.color = 'white';
+        } else {
+          button.style.opacity = '0.5';
+        }
+      }
+      if (explanationEl) explanationEl.style.display = 'block';
+      this.options.onNoIdea?.();
+    };
   }
 }

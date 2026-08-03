@@ -2568,6 +2568,309 @@ async function run() {
     }
     console.log('Verified the clicks are persisted in the collector NDJSON.');
 
+    // ------------------------------------------------------------------
+    // STEP 15: characters, readings and No Idea. This is the whole
+    // "the pinyin disappears as I learn" loop, in the real app: cards lose
+    // their embedded readings, a generated ledger supplies them per
+    // character, grading a card credits the characters inside it, and a
+    // character that reaches the known level stops being annotated.
+    // ------------------------------------------------------------------
+    console.log('STEP 15: Chinese cards with embedded readings...');
+    const chineseMdPath = path.join(vaultPath, 'chinese-cards.md');
+    // Three cards that SHARE 车: grading all three credits that one character
+    // three times, which is exactly what promotes it past the known level.
+    const chineseCards = [
+      ['开车', 'kāichē — to drive (a car)', 'e0000001'],
+      ['骑车', 'qíchē — to ride (a bike)', 'e0000002'],
+      ['坐车', 'zuòchē — to ride (as a passenger)', 'e0000003'],
+    ];
+    fs.writeFileSync(
+      chineseMdPath,
+      chineseCards
+        .map(([front, back, id]) => `${front}\t${back}\t\t${id}\t1\tChinese`)
+        .join('\n'),
+      'utf-8',
+    );
+    const bankRegistered = await page.evaluate(async () => {
+      const plugin = (window as any).app.plugins.plugins['hanzi-practice'];
+      plugin.settings.banks.push({
+        name: 'Chinese',
+        filePath: 'chinese-cards.md',
+      });
+      await plugin.saveData(plugin.settings);
+      return plugin.settings.banks.map((b: {name: string}) => b.name);
+    });
+    if (!bankRegistered.includes('Chinese')) {
+      throw new Error(
+        `Chinese bank not registered: ${JSON.stringify(bankRegistered)}`,
+      );
+    }
+
+    console.log('STEP 15a: Migrating the embedded pinyin out of the cards...');
+    const migrated = await page.evaluate(async () => {
+      return await (window as any).app.plugins.plugins[
+        'hanzi-practice'
+      ].runPinyinMigration();
+    });
+    if (migrated.cards < 3) {
+      await dump(page, 'STEP15-migration-short');
+      throw new Error(
+        `Expected 3 cards migrated, got ${JSON.stringify(migrated)}`,
+      );
+    }
+    const migratedText = fs.readFileSync(chineseMdPath, 'utf-8');
+    if (
+      migratedText.includes('kāichē') ||
+      !migratedText.includes('to drive (a car)') ||
+      !migratedText.includes('e0000001')
+    ) {
+      throw new Error(
+        `Migration did not strip the reading (or lost the id):\n${migratedText}`,
+      );
+    }
+    console.log('Verified the readings left the cards and the ids stayed.');
+
+    console.log('STEP 15b: The generated character ledger...');
+    const ledgerPath = path.join(vaultPath, 'hanzi-character-progress.md');
+    let ledgerText = '';
+    for (let i = 0; i < 40; i++) {
+      if (fs.existsSync(ledgerPath)) {
+        ledgerText = fs.readFileSync(ledgerPath, 'utf-8');
+        if (ledgerText.includes('\t0\tCharacters')) break;
+      }
+      await delay(250);
+    }
+    if (!ledgerText.includes('# Character progress')) {
+      throw new Error(
+        `Character ledger missing its progress header:\n${ledgerText.slice(0, 400)}`,
+      );
+    }
+    for (const char of ['开', '车', '骑', '坐']) {
+      if (!ledgerText.includes(`${char}\t`)) {
+        throw new Error(`Ledger has no line for ${char}:\n${ledgerText}`);
+      }
+    }
+    // The reading came from the shipped dictionary, not from the card text.
+    if (!/车\tche1/.test(ledgerText)) {
+      throw new Error(`Ledger did not pick up 车's reading:\n${ledgerText}`);
+    }
+    console.log('Verified the ledger holds every character with its reading.');
+
+    console.log('STEP 15c: A card renders its readings per character...');
+    await page.evaluate(async () => {
+      const app = (window as any).app;
+      app.workspace.detachLeavesOfType('hanzi-practice-view');
+      await app.plugins.plugins['hanzi-practice'].activateView(['Chinese']);
+    });
+    await page.waitForSelector('.hanzi-annotated-unit', {timeout: 10000});
+    const annotated = await page.evaluate(() => {
+      const front = document.querySelector('.flash-card-front') as HTMLElement;
+      const units = Array.from(
+        front.querySelectorAll<HTMLElement>('.hanzi-annotated-unit'),
+      );
+      return {
+        text: front.dataset.text,
+        chars: units.map(u => u.dataset.char),
+        readings: units.map(
+          u => u.querySelector('.hanzi-annotated-pinyin')?.textContent,
+        ),
+        // The reserved line must exist even where a reading is empty.
+        reservedLines: units.filter(
+          u => u.querySelector('.hanzi-annotated-pinyin') !== null,
+        ).length,
+      };
+    });
+    if (
+      !annotated.text ||
+      annotated.chars.length !== 2 ||
+      annotated.reservedLines !== 2 ||
+      !annotated.readings.some((r: string | undefined) => (r ?? '').length > 0)
+    ) {
+      await dump(page, 'STEP15-annotation-wrong');
+      throw new Error(`Card annotation wrong: ${JSON.stringify(annotated)}`);
+    }
+    console.log(
+      `Verified readings render above the characters: ${JSON.stringify(annotated.readings)}.`,
+    );
+    // The notices from the migration/sync would otherwise sit in the frame.
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    await takeAndCompareScreenshot(page, 'step15-annotated-card');
+
+    console.log('STEP 15d: Grading credits the characters in the card...');
+    for (let card = 0; card < 3; card++) {
+      await page.waitForSelector('.flash-card-flip', {timeout: 10000});
+      await page.click('.flash-card-flip');
+      await page.evaluate(() => {
+        const veryEasy = Array.from(
+          document.querySelectorAll('.flash-card-grade'),
+        ).find(b => (b as HTMLElement).dataset.score === '5');
+        (veryEasy as HTMLElement | undefined)?.click();
+      });
+      await delay(900);
+    }
+    const historyAfter = fs.readFileSync(historyMdPath, 'utf-8');
+    const creditLines = historyAfter
+      .split('\n')
+      .filter(line => line.includes('(via card'));
+    if (creditLines.length < 6) {
+      throw new Error(
+        `Expected character credits in history, found ${creditLines.length}:\n` +
+          creditLines.join('\n'),
+      );
+    }
+    if (!creditLines.some(line => line.includes('车 (via card'))) {
+      throw new Error('车 was never credited from the sentence cards');
+    }
+    console.log(
+      `Verified ${creditLines.length} character credits were written.`,
+    );
+
+    console.log('STEP 15e: A known character loses its reading...');
+    // No re-open needed: the view reloads the character index with every card,
+    // so the card on screen after the third grade already reflects the new
+    // levels. (Detaching the last leaf races Obsidian's tab-group bookkeeping.)
+    await page.waitForSelector('.hanzi-annotated-unit', {timeout: 10000});
+    const levels = await page.evaluate(() => {
+      const units = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '.flash-card-front .hanzi-annotated-unit',
+        ),
+      );
+      return units.map(u => ({
+        char: u.dataset.char,
+        level: Number(u.dataset.level),
+        reading: u.querySelector('.hanzi-annotated-pinyin')?.textContent ?? '',
+        // The line itself must still be in the DOM: that is what stops the
+        // card reflowing when a character is finally learned.
+        hasLine: u.querySelector('.hanzi-annotated-pinyin') !== null,
+      }));
+    });
+    const che = levels.find((unit: {char?: string}) => unit.char === '车');
+    if (!che) {
+      throw new Error(`No 车 on the card: ${JSON.stringify(levels)}`);
+    }
+    if (che.level < 4 || che.reading !== '' || !che.hasLine) {
+      await dump(page, 'STEP15-level-gate-wrong');
+      throw new Error(
+        '车 should be known (level 4+) with a reserved but EMPTY reading: ' +
+          JSON.stringify(levels),
+      );
+    }
+    const stillLearning = levels.find(
+      (unit: {char?: string}) => unit.char !== '车',
+    );
+    if (!stillLearning || stillLearning.reading === '') {
+      throw new Error(
+        `The other character should still show its reading: ${JSON.stringify(levels)}`,
+      );
+    }
+    console.log(
+      `Verified 车 reached level ${che.level} and dropped its reading, ` +
+        `while ${stillLearning.char} keeps "${stillLearning.reading}".`,
+    );
+    await page.evaluate(() => {
+      document
+        .querySelectorAll('.notice')
+        .forEach(n => (n as HTMLElement).remove());
+    });
+    // The SAME card as step15-annotated-card, with 车's reading gone and the
+    // characters in exactly the same place — the reserved line at work.
+    await takeAndCompareScreenshot(page, 'step15-known-character-unannotated');
+
+    console.log('STEP 15f: No Idea on a multiple-choice card...');
+    // Switch the OPEN view's banks rather than detaching and reopening.
+    await page.evaluate(async () => {
+      await (window as any).app.plugins.plugins['hanzi-practice'].activateView([
+        'Capitals',
+      ]);
+    });
+    let mcShown = false;
+    for (let i = 0; i < 30; i++) {
+      const hasNoIdea = await page.evaluate(
+        () => document.querySelector('.mc-no-idea') !== null,
+      );
+      if (hasNoIdea) {
+        mcShown = true;
+        break;
+      }
+      // Flip past any flashcard until the multiple-choice card comes round.
+      const flip = await page.$('.flash-card-flip');
+      if (flip) {
+        await flip.click();
+        await page.evaluate(() => {
+          const grade = Array.from(
+            document.querySelectorAll('.flash-card-grade'),
+          ).find(b => (b as HTMLElement).dataset.score === '5');
+          (grade as HTMLElement | undefined)?.click();
+        });
+      }
+      await delay(400);
+    }
+    if (!mcShown) {
+      await dump(page, 'STEP15-no-mc-card');
+      throw new Error('Never reached the multiple-choice card in Capitals');
+    }
+    const beforeNoIdea = fs.readFileSync(historyMdPath, 'utf-8');
+    await page.click('.mc-no-idea');
+    let noIdeaScored = false;
+    for (let i = 0; i < 20; i++) {
+      const history = fs.readFileSync(historyMdPath, 'utf-8');
+      const added = history.slice(beforeNoIdea.length);
+      if (/有没有\): 0/.test(added) || /: 0\s*$/.test(added.trim())) {
+        noIdeaScored = true;
+        break;
+      }
+      await delay(250);
+    }
+    if (!noIdeaScored) {
+      await dump(page, 'STEP15-no-idea-not-scored');
+      throw new Error('"No Idea" did not write a 0 to history');
+    }
+    console.log('Verified "No Idea" scores 0 without guessing.');
+
+    console.log('STEP 15g: Telemetry for the character system...');
+    const characterTelemetry = await page.evaluate(async (since: number) => {
+      const api = (window as any).bugCollector.register({
+        pluginId: 'e2e-runner',
+        pluginVersion: '1.0.0',
+      });
+      await api.flush();
+      const read = await api.getRecords(since, Date.now() + 1000);
+      if (!read.ok) return {error: 'getRecords failed'};
+      return {records: JSON.parse(JSON.stringify(read.val.records))};
+    }, telemetrySince);
+    if (!characterTelemetry.records) {
+      throw new Error('Could not read character telemetry back');
+    }
+    const characterLogs = LogsFrom(
+      characterTelemetry.records as TelemetryEnvelope[],
+      'hanzi-practice',
+    );
+    const characterVerdict = VerifyLogExpectations(characterLogs, [
+      ExpectLog({message: 'Character ledger synced'}),
+      ExpectLog({
+        message: 'Characters credited from a graded card',
+        data: {credited: Contains('车')},
+      }),
+      ExpectLog({
+        message: 'Character reached the known level; its pinyin is now hidden',
+        data: {character: '车'},
+      }).times(Exactly(1)),
+      ExpectLog({message: 'User action: No Idea (declined to guess)'}),
+      ExpectLog({message: 'Pinyin migration finished', data: {files: 1}}),
+    ]);
+    if (characterVerdict.err) {
+      await dump(page, 'STEP15-telemetry-failed');
+      throw new Error(
+        `Character telemetry expectations failed:\n${characterVerdict.val.message}`,
+      );
+    }
+    console.log('Verified the character system reports what it did.');
+
     log('E2E steps complete!');
     log('Closing Obsidian...');
     await browser.disconnect();

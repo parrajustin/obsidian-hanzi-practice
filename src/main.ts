@@ -1,9 +1,20 @@
-import {apiVersion, Plugin, WorkspaceLeaf} from 'obsidian';
+import {apiVersion, Notice, Plugin, WorkspaceLeaf} from 'obsidian';
 import {
+  FileSystemType,
+  FileUtil,
+} from 'standard-obsidian-lib/src/filesystem/file_util';
+import {None, Optional, Some} from 'standard-ts-lib/src/optional';
+import {
+  DEFAULT_CHARACTER_FILE,
   HanziPluginSettings,
   HanziSettingTab,
+  resolveBankSources,
   SETTINGS_SCHEMA,
 } from './settings';
+import {LedgerSyncSummary, SyncCharacterLedger} from './utils/character_ledger';
+import {ProgressFor} from './character_progress';
+import {StripPinyinFromCardFile} from './utils/migrate_pinyin';
+import {CHARACTER_BANK} from './utils/practice_list';
 import {HanziPracticeView} from './views/hanzi_view';
 import {AddCharacterModal} from './commands/add_character_modal';
 import {AddFlashcardModal} from './commands/add_flashcard_modal';
@@ -179,6 +190,24 @@ export default class HanziPracticePlugin extends Plugin {
       },
     });
 
+    this.addCommand({
+      id: 'sync-character-progress',
+      name: 'Sync Character Progress',
+      callback: () => {
+        LogInfo('Command invoked', {command: 'sync-character-progress'});
+        void this.runCharacterSync();
+      },
+    });
+
+    this.addCommand({
+      id: 'strip-embedded-pinyin',
+      name: 'Migrate Cards: Remove Embedded Pinyin',
+      callback: () => {
+        LogInfo('Command invoked', {command: 'strip-embedded-pinyin'});
+        void this.runPinyinMigration();
+      },
+    });
+
     // Id kept from when the plugin was hanzi-only (renaming command ids
     // breaks users' hotkey bindings); it now edits every bank.
     this.addCommand({
@@ -271,6 +300,107 @@ export default class HanziPracticePlugin extends Plugin {
   }
 
   /**
+   * Rebuild the character ledger from every card in every bank: the one place
+   * the 10MB dictionary is read on this path, which is exactly why it is a
+   * command and not something the practice view does.
+   */
+  async runCharacterSync(): Promise<Optional<LedgerSyncSummary>> {
+    const dictionary = await this.getDictionary();
+    if (!dictionary.ok) {
+      new Notice(`Character sync failed: ${dictionary.val.message}`);
+      return None;
+    }
+    const {sources} = await resolveBankSources(this.app, this.settings);
+    const entries = await HistoryManager.loadAllPracticeEntries(
+      this.app,
+      sources,
+    );
+    const history = await HistoryManager.parseHistory(
+      this.app,
+      this.settings.historyFilePath,
+    );
+    const synced = await SyncCharacterLedger(
+      this.app,
+      this.settings.characterFilePath,
+      entries,
+      dictionary.val,
+      entry =>
+        ProgressFor(
+          entry.character,
+          HistoryManager.reviewsForEntry(history, entry),
+        ),
+    );
+    if (!synced.ok) {
+      LogError('Character sync failed', synced.val, {
+        filePath: this.settings.characterFilePath,
+      });
+      new Notice(`Character sync failed: ${synced.val.message}`);
+      return None;
+    }
+    const summary = synced.val;
+    new Notice(
+      `Character progress synced — ${summary.total} characters ` +
+        `(${summary.added} new` +
+        `${summary.unknown.length > 0 ? `, ${summary.unknown.length} without a dictionary entry` : ''}).`,
+    );
+    return Some(summary);
+  }
+
+  /**
+   * Take the embedded readings out of every card file, then re-sync so the
+   * readings the cards just lost are available from the ledger instead. The
+   * id column is preserved line by line, so no card loses its history.
+   */
+  async runPinyinMigration(): Promise<{files: number; cards: number}> {
+    const {sources} = await resolveBankSources(this.app, this.settings);
+    let files = 0;
+    let cards = 0;
+    for (const source of sources) {
+      // The ledger is generated from the dictionary; it never carried an
+      // embedded reading to strip.
+      if (source.name === CHARACTER_BANK) continue;
+      const read = await FileUtil.fetchFile(
+        this.app,
+        source.filePath,
+        FileSystemType.OBSIDIAN,
+      );
+      if (!read.ok) continue;
+      const text = new TextDecoder('utf-8').decode(read.val);
+      const migrated = StripPinyinFromCardFile(text);
+      if (migrated.changed === 0) continue;
+      const written = await FileUtil.writeToFile(
+        this.app,
+        source.filePath,
+        new TextEncoder().encode(migrated.text),
+        FileSystemType.OBSIDIAN,
+      );
+      if (written.err) {
+        LogError('Could not rewrite a bank file', written.val, {
+          bank: source.name,
+          filePath: source.filePath,
+        });
+        continue;
+      }
+      files++;
+      cards += migrated.changed;
+      LogInfo('Stripped embedded pinyin from a bank', {
+        bank: source.name,
+        filePath: source.filePath,
+        cards: migrated.changed,
+      });
+    }
+    LogInfo('Pinyin migration finished', {files, cards});
+    new Notice(
+      cards === 0
+        ? 'No cards had embedded pinyin to remove.'
+        : `Removed embedded pinyin from ${cards} card(s) in ${files} file(s).`,
+    );
+    // The readings just left the cards; the ledger is where they come from now.
+    if (cards > 0) await this.runCharacterSync();
+    return {files, cards};
+  }
+
+  /**
    * "I left the plugin": the practice tab staying OPEN but no longer being
    * looked at is invisible to the view's own open/close logs — switching to
    * another tab, collapsing to a sidebar or moving Obsidian to the background
@@ -337,11 +467,12 @@ export default class HanziPracticePlugin extends Plugin {
       this.settings = defRes.ok
         ? defRes.val
         : {
-            version: 2,
+            version: 3,
             historyFilePath: 'history.md',
             practiceFilePath: 'practice.md',
             banks: [],
             dataPacks: [],
+            characterFilePath: DEFAULT_CHARACTER_FILE,
           };
     }
   }

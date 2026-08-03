@@ -1,4 +1,5 @@
 import {FLASHCARD_GRADES} from './flash_card';
+import {AnnotationLookup, renderAnnotatedText} from './annotated_text';
 import {parseClozeSegments} from '../utils/practice_list';
 
 /**
@@ -17,6 +18,8 @@ export class ClozeCard {
   private graded = false;
   /** Told when the answer is revealed, so the view can log the reveal. */
   private onReveal: () => void;
+  /** Per-character readings for the sentence (see annotated_text.ts). */
+  private annotate: AnnotationLookup | undefined;
 
   constructor(
     container: HTMLElement,
@@ -25,7 +28,9 @@ export class ClozeCard {
     onGrade: (score: number) => void,
     explanation = '',
     onReveal: () => void = () => {},
+    annotate?: AnnotationLookup,
   ) {
+    this.annotate = annotate;
     this.container = container;
     this.text = text;
     this.hint = hint;
@@ -54,6 +59,18 @@ export class ClozeCard {
     promptEl.style.fontSize = '1.4em';
     promptEl.style.textAlign = 'center';
     promptEl.style.whiteSpace = 'pre-wrap';
+    // What the prompt SAYS, without the per-character readings mixed in.
+    promptEl.dataset.text = segments
+      .map(segment => (segment.blank ? '____' : segment.text))
+      .join('');
+    if (this.annotate) {
+      // Annotated characters are stacked (reading over character), so the
+      // prompt has to lay them out in a row rather than as inline text.
+      promptEl.style.display = 'flex';
+      promptEl.style.flexWrap = 'wrap';
+      promptEl.style.justifyContent = 'center';
+      promptEl.style.alignItems = 'flex-end';
+    }
     for (const segment of segments) {
       if (segment.blank) {
         const blankEl = promptEl.createEl('span', {
@@ -62,6 +79,8 @@ export class ClozeCard {
         });
         blankEl.style.textDecoration = 'underline';
         blankEl.style.letterSpacing = '2px';
+      } else if (this.annotate) {
+        renderAnnotatedText(promptEl, segment.text, this.annotate);
       } else {
         promptEl.createEl('span', {text: segment.text});
       }

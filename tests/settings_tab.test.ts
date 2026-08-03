@@ -47,7 +47,8 @@ describe('HanziSettingTab', () => {
     );
     (FileUtil.writeToFile as jest.Mock).mockResolvedValue(Ok(undefined));
     settings = {
-      version: 2,
+      version: 3,
+      characterFilePath: 'hanzi-character-progress.md',
       historyFilePath: 'hanzi-practice-history.md',
       practiceFilePath: 'hanzi-practice-words.md',
       banks: [],
@@ -295,8 +296,10 @@ describe('HanziSettingTab', () => {
       .mockResolvedValue([]);
     tab.hide();
     await flush();
-    expect(load).toHaveBeenCalledTimes(2); // Hanzi words file + Capitals
+    // Hanzi words file + the generated character ledger + Capitals.
+    expect(load).toHaveBeenCalledTimes(3);
     expect(noticeMessages.at(-1)).toContain('Hanzi: 0 cards');
+    expect(noticeMessages.at(-1)).toContain('Characters: 0 cards');
     expect(noticeMessages.at(-1)).toContain('Capitals: 0 cards');
   });
 
@@ -325,7 +328,8 @@ describe('HanziSettingTab', () => {
       .mockResolvedValue([]);
     tab.hide();
     await flush();
-    expect(load).toHaveBeenCalledTimes(2); // Hanzi words file + pack's German
+    // Hanzi words file + the generated character ledger + the pack's German.
+    expect(load).toHaveBeenCalledTimes(3);
     expect(
       noticeMessages.some(
         m => m.includes('Hanzi: 0 cards') && m.includes('German: 0 cards'),

@@ -31,3 +31,55 @@ export function lookupDefinitions(
   }
   return entries;
 }
+
+/**
+ * Definition prefixes that mark a SECONDARY sense: a cross-reference, a
+ * variant spelling, or a colloquialism. CEDICT lists senses in an order that
+ * has nothing to do with frequency — 车's first sense is the surname "Che",
+ * 吗's is the colloquial "what?", 个's is "used in 自個兒" — so a tool that
+ * takes the first sense teaches the wrong reading.
+ */
+const SECONDARY_SENSE_PREFIXES = [
+  'surname ',
+  'used in ',
+  'variant of',
+  'old variant of',
+  'unofficial variant of',
+  'abbr. for',
+  'see ',
+  '(coll.)',
+];
+
+/** Lower is better. 0 = an ordinary sense, 1 = one of the marked ones. */
+function sensePenalty(entry: CedictEntry): number {
+  // CEDICT capitalises the pinyin of proper nouns (`Che1` vs `che1`), which
+  // is the most reliable "this is a name, not the word" signal it has.
+  if (/^[A-Z]/.test(entry.pinyin)) return 1;
+  const english = entry.english.trim().toLowerCase();
+  return SECONDARY_SENSE_PREFIXES.some(prefix => english.startsWith(prefix))
+    ? 1
+    : 0;
+}
+
+/**
+ * The sense to teach for a character: the first one that is not a surname,
+ * variant or colloquialism, falling back to the first sense when every
+ * candidate is marked (a character whose only reading IS a surname still
+ * deserves a reading). Dictionary order breaks ties, so the common sense of an
+ * ordinary character is untouched.
+ */
+export function PickPrimarySense(
+  senses: readonly CedictEntry[],
+): CedictEntry | undefined {
+  let best: CedictEntry | undefined;
+  let bestPenalty = Number.POSITIVE_INFINITY;
+  for (const sense of senses) {
+    const penalty = sensePenalty(sense);
+    if (penalty < bestPenalty) {
+      best = sense;
+      bestPenalty = penalty;
+      if (penalty === 0) break;
+    }
+  }
+  return best;
+}

@@ -13,7 +13,7 @@ import {
   mergeDataPackBanks,
   parseDataPack,
 } from './utils/data_pack';
-import {BankSource, HANZI_BANK} from './utils/practice_list';
+import {BankSource, CHARACTER_BANK, HANZI_BANK} from './utils/practice_list';
 import {LogError, LogInfo} from './telemetry/telemetry';
 import {UiClickLogger} from './telemetry/ui_debug';
 import {HistoryManager} from './utils/history_manager';
@@ -63,27 +63,51 @@ const v2Schema = z.object({
   dataPacks: z.array(dataPackConfigSchema),
 });
 
-export type HanziPluginSettings = z.infer<typeof v2Schema>;
+type V2Settings = z.infer<typeof v2Schema>;
+
+/** Where the generated character ledger lives (see utils/character_ledger.ts). */
+export const DEFAULT_CHARACTER_FILE = 'hanzi-character-progress.md';
+
+const v3Schema = v2Schema.omit({version: true}).extend({
+  version: z.literal(3),
+  /**
+   * The generated per-character progress file. It is also a practiceable
+   * bank (`Characters`), so it is resolved like any other bank.
+   */
+  characterFilePath: z.string(),
+});
+
+export type HanziPluginSettings = z.infer<typeof v3Schema>;
 
 export const SETTINGS_SCHEMA = new SchemaManager<
-  [V0Settings, V1Settings, HanziPluginSettings],
-  2
+  [V0Settings, V1Settings, V2Settings, HanziPluginSettings],
+  3
 >(
   'HanziPluginSettings',
-  [v0Schema, v1Schema, v2Schema],
+  [v0Schema, v1Schema, v2Schema, v3Schema],
   [
     // v0 -> v1: banks were introduced; older configs simply have none.
     (data: V0Settings) => Ok({...data, version: 1 as const, banks: []}),
     // v1 -> v2: data packs were introduced; older configs have none (banks
     // imported by the old copy-into-settings flow stay as manual banks).
     (data: V1Settings) => Ok({...data, version: 2 as const, dataPacks: []}),
+    // v2 -> v3: the character ledger was introduced. It is generated, so an
+    // older config just gets the default path; the file appears at the first
+    // sync.
+    (data: V2Settings) =>
+      Ok({
+        ...data,
+        version: 3 as const,
+        characterFilePath: DEFAULT_CHARACTER_FILE,
+      }),
   ],
   () => ({
-    version: 2,
+    version: 3,
     historyFilePath: 'hanzi-practice-history.md',
     practiceFilePath: 'hanzi-practice-words.md',
     banks: [],
     dataPacks: [],
+    characterFilePath: DEFAULT_CHARACTER_FILE,
   }),
 );
 
@@ -173,6 +197,11 @@ export async function resolveBankSources(
   return {
     sources: [
       {name: HANZI_BANK, filePath: settings.practiceFilePath},
+      // The generated ledger is a real bank: the characters a study pack
+      // introduced can be drilled like anything else.
+      ...(settings.characterFilePath
+        ? [{name: CHARACTER_BANK, filePath: settings.characterFilePath}]
+        : []),
       ...banks,
     ],
     packGroups: dedupedGroups,

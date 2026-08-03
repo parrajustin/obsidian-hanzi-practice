@@ -4,7 +4,12 @@ import {
   FileSystemType,
 } from 'standard-obsidian-lib/src/filesystem/file_util';
 import {SpacedRepetition, Review} from '../spaced_repetition';
+import {CrossesKnownThreshold} from '../character_progress';
+import {CharactersInCard} from './character_ledger';
+import {Ok, Result} from 'standard-ts-lib/src/result';
+import {StatusError} from 'standard-ts-lib/src/status_error';
 import {
+  LogDebug,
   LogError,
   LogErrorAsWarning,
   LogInfo,
@@ -124,39 +129,20 @@ export class HistoryManager {
   ): Promise<void> {
     SetSpanAttributes({'card.id': entry.id, 'card.score': score});
     const timestamp = Date.now();
-    const line = `\n- [${timestamp}] ${entry.id} ${entryLabel(entry)}: ${score}`;
+    const line = `- [${timestamp}] ${entry.id} ${entryLabel(entry)}: ${score}`;
 
-    const fileResult = await FileUtil.fetchFile(
-      app,
-      historyFilePath,
-      FileSystemType.OBSIDIAN,
-    );
-    let currentData: Uint8Array = new Uint8Array(0);
-    if (fileResult.ok) {
-      currentData = fileResult.val;
-    }
-
-    const decoder = new TextDecoder('utf-8');
-    const text = decoder.decode(currentData);
-    const newText = text + line;
-
-    const encoder = new TextEncoder();
-    const written = await FileUtil.writeToFile(
-      app,
-      historyFilePath,
-      encoder.encode(newText),
-      FileSystemType.OBSIDIAN,
-    );
+    const appended = await this.appendLines(app, historyFilePath, [line]);
     // A failed write silently loses the user's practice result, which is
     // exactly the kind of invisible failure a bug report needs to carry.
-    if (written.err) {
-      LogError('Failed to append practice result to history', written.val, {
+    if (appended.err) {
+      LogError('Failed to append practice result to history', appended.val, {
         historyFilePath,
         entryId: entry.id,
         score,
       });
       return;
     }
+    const newText = appended.val;
 
     // WHAT WAS SAVED, for this exact card: the line as written, plus the
     // schedule that score just bought — a "why is this card back already"
@@ -178,6 +164,116 @@ export class HistoryManager {
       dueInDays: dueDay - today,
       dueAgainToday: dueDay <= today,
     });
+  }
+
+  /**
+   * Append lines to the history file in ONE read-modify-write, returning the
+   * file's new text so the caller can derive schedules from it without a
+   * second read. Crediting a sentence's characters would otherwise be one
+   * write per character.
+   */
+  private static async appendLines(
+    app: App,
+    historyFilePath: string,
+    lines: readonly string[],
+  ): Promise<Result<string, StatusError>> {
+    const fileResult = await FileUtil.fetchFile(
+      app,
+      historyFilePath,
+      FileSystemType.OBSIDIAN,
+    );
+    const current = fileResult.ok ? fileResult.val : new Uint8Array(0);
+    const text = new TextDecoder('utf-8').decode(current);
+    const newText = `${text}${lines.map(line => `\n${line}`).join('')}`;
+    const written = await FileUtil.writeToFile(
+      app,
+      historyFilePath,
+      new TextEncoder().encode(newText),
+      FileSystemType.OBSIDIAN,
+    );
+    if (written.err) return written as unknown as Result<string, StatusError>;
+    return Ok(newText);
+  }
+
+  /**
+   * Credit every tracked character in a graded card with that card's score.
+   *
+   * Reading 你喜欢开车吗？correctly is evidence about 开 and 车, not just about
+   * the card — this is what lets a character earn its way to level 4 (and lose
+   * its pinyin) from sentences alone. Only characters already in the ledger are
+   * credited: without a ledger line there is no id to key the reviews by, and
+   * inventing one would orphan the history at the next sync.
+   *
+   * Returns the characters credited and those that crossed the
+   * hide-the-pinyin threshold on this grade — the caller logs and counts them.
+   */
+  static async creditCharacters(
+    app: App,
+    historyFilePath: string,
+    card: PracticeEntry,
+    score: number,
+    index: ReadonlyMap<string, {id: string; character: string}>,
+  ): Promise<{credited: string[]; untracked: string[]; levelUps: string[]}> {
+    const chars = CharactersInCard(card);
+    const credited: string[] = [];
+    const untracked: string[] = [];
+    const lines: string[] = [];
+    const timestamp = Date.now();
+    for (const char of chars) {
+      const tracked = index.get(char);
+      if (!tracked) {
+        untracked.push(char);
+        continue;
+      }
+      credited.push(char);
+      // The label names the card the credit came from, so a reader of the
+      // history file can tell drills from sentence credit at a glance.
+      lines.push(
+        `- [${timestamp}] ${tracked.id} ${char} (via card ${card.id}): ${score}`,
+      );
+    }
+    if (lines.length === 0) {
+      if (untracked.length > 0) {
+        LogDebug('Card had no tracked characters to credit', {
+          cardId: card.id,
+          untracked,
+        });
+      }
+      return {credited, untracked, levelUps: []};
+    }
+
+    const before = await this.parseHistory(app, historyFilePath);
+    const appended = await this.appendLines(app, historyFilePath, lines);
+    if (appended.err) {
+      LogError('Failed to credit characters', appended.val, {
+        historyFilePath,
+        cardId: card.id,
+        characters: credited,
+      });
+      return {credited: [], untracked, levelUps: []};
+    }
+    const after = this.parseHistoryText(appended.val);
+
+    const levelUps: string[] = [];
+    for (const char of credited) {
+      const tracked = index.get(char);
+      if (!tracked) continue;
+      const key = tracked.id;
+      if (CrossesKnownThreshold(before[key] ?? [], after[key] ?? [])) {
+        levelUps.push(char);
+      }
+    }
+    LogInfo('Characters credited from a graded card', {
+      cardId: card.id,
+      cardType: card.cardType,
+      score,
+      credited,
+      creditedCount: credited.length,
+      untracked,
+      // The characters whose pinyin disappears from now on.
+      levelUps,
+    });
+    return {credited, untracked, levelUps};
   }
 
   /**
