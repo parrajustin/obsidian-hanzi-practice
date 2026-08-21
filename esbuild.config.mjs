@@ -16,7 +16,11 @@ const STROKES_GZ = "hanzi-strokes.bin.gz";
 // the HZS1 codec with the runtime reader), so bundle it for node first, then
 // run it as a child process.
 async function genStrokeData(distDir) {
-	const genDir = path.join(process.cwd(), "node_modules", ".cache", "hanzi-gen");
+	// HANZI_GEN_DIR overrides the scratch dir for the generator bundle: under
+	// Bazel the linked node_modules tree is read-only, so the build points
+	// this at a writable path instead.
+	const genDir = process.env.HANZI_GEN_DIR ??
+		path.join(process.cwd(), "node_modules", ".cache", "hanzi-gen");
 	const genOut = path.join(genDir, "gen_stroke_data.cjs");
 	await esbuild.build({
 		entryPoints: ["scripts/gen_stroke_data.ts"],

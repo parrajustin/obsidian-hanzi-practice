@@ -6,8 +6,9 @@
 # CJK fonts, dependency install, AppImage extraction, and the plugin/runner
 # build. `docker run` then just executes the pre-built E2E.
 #
-# Build CONTEXT must contain the three repos as siblings (the plugin uses
-# `file:../standard-*` deps); docker/build-and-run.sh stages that context.
+# Build CONTEXT must mirror the monorepo layout (the plugin uses
+# `file:../../common/standard-*` and `file:../obsidian-bug-collector` deps);
+# docker/build-and-run.sh stages that context.
 FROM node:24-bookworm-slim
 
 # --- System deps: Xvfb (virtual display), CJK fonts, Electron/Chromium libs ---
@@ -33,21 +34,21 @@ RUN npm install -g pnpm@11
 WORKDIR /workspace
 
 # Sibling file: deps first (change rarely -> better layer caching). The plugin's
-# package.json references `file:../standard-*` and `file:../obsidian-bug-collector`,
-# so the layout under /workspace mirrors the host:
-# /workspace/{obsidian-hanzi-practice,standard-*,obsidian-bug-collector}.
-COPY standard-ts-lib/ ./standard-ts-lib/
-COPY standard-obsidian-lib/ ./standard-obsidian-lib/
-COPY obsidian-bug-collector/ ./obsidian-bug-collector/
+# package.json references `file:../../common/standard-*` and
+# `file:../obsidian-bug-collector`, so the layout under /workspace mirrors the
+# monorepo: /workspace/{obsidian/{obsidian-hanzi-practice,obsidian-bug-collector},common/standard-*}.
+COPY common/standard-ts-lib/ ./common/standard-ts-lib/
+COPY common/standard-obsidian-lib/ ./common/standard-obsidian-lib/
+COPY obsidian/obsidian-bug-collector/ ./obsidian/obsidian-bug-collector/
 
-WORKDIR /workspace/obsidian-hanzi-practice
+WORKDIR /workspace/obsidian/obsidian-hanzi-practice
 
 # Install deps using only the manifests first (cached until deps change).
-COPY obsidian-hanzi-practice/package.json obsidian-hanzi-practice/pnpm-lock.yaml obsidian-hanzi-practice/pnpm-workspace.yaml ./
+COPY obsidian/obsidian-hanzi-practice/package.json obsidian/obsidian-hanzi-practice/pnpm-lock.yaml obsidian/obsidian-hanzi-practice/pnpm-workspace.yaml ./
 RUN pnpm install --frozen-lockfile || pnpm install
 
 # The rest of the plugin repo (includes the committed Obsidian AppImage).
-COPY obsidian-hanzi-practice/ ./
+COPY obsidian/obsidian-hanzi-practice/ ./
 
 # Extract the AppImage at BUILD time. `--appimage-extract` self-extracts without
 # FUSE, so no SYS_ADMIN/--device is needed at run time. Drop the 124MB AppImage
@@ -62,7 +63,7 @@ RUN chmod +x Obsidian-1.12.7.AppImage \
 RUN npm run build && npm run build:e2e
 
 ENV DISPLAY=:99
-COPY obsidian-hanzi-practice/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY obsidian/obsidian-hanzi-practice/docker/entrypoint.sh /usr/local/bin/entrypoint.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh
 
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]

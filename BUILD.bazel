@@ -1,0 +1,272 @@
+# obsidian-hanzi-practice — spaced-repetition practice plugin (reference plugin).
+#
+# npm-script parity:
+#   build              -> :build         (esbuild bundle + dist/ assembly: main.js,
+#                                         manifest, gzipped CEDICT, stroke DB, tarball)
+#   test:unit          -> :test          (jest, @swc/jest transform, jsdom)
+#   test:ts            -> :type_check    (tsc --noEmit)
+#   lint               -> :lint          (eslint, gts flat config)
+#   build:e2e          -> :e2e_runner, :component_runner, :component_harness
+#   test:e2e:docker    -> bazel run :e2e_docker            (manual; needs docker)
+#   test:e2e:docker:mobile  -> bazel run :e2e_docker_mobile
+#   test:e2e:docker:goldens -> bazel run :e2e_docker_goldens
+#   test:component:docker   -> bazel run :component_docker
+#   test:component:docker:goldens -> bazel run :component_docker_goldens
+#   dev                -> bazel run :dev (watch mode, runs from the source tree)
+
+load("@aspect_rules_esbuild//esbuild:defs.bzl", "esbuild")
+load("@aspect_rules_jest//jest:defs.bzl", "jest_test")
+load("@aspect_rules_js//js:defs.bzl", "js_binary", "js_run_binary")
+load("@npm_obsidian_hanzi_practice//:defs.bzl", "npm_link_all_packages")
+load("@npm_obsidian_hanzi_practice//obsidian/obsidian-hanzi-practice:eslint/package_json.bzl", eslint_bin = "bin")
+load("@npm_obsidian_hanzi_practice//obsidian/obsidian-hanzi-practice:typescript/package_json.bzl", typescript_bin = "bin")
+
+exports_files([
+    "package.json",
+    "pnpm-lock.yaml",
+    "pnpm-workspace.yaml",
+])
+
+# Links every npm dependency from the pnpm lockfile as :node_modules/<pkg>.
+npm_link_all_packages(name = "node_modules")
+
+# The package's own esbuild driver script (esbuild.config.mjs). Besides the
+# main.ts bundle it runs the stroke-DB generator (scripts/gen_stroke_data.ts)
+# and gzips the CEDICT dictionary into dist/.
+js_binary(
+    name = "esbuild_config",
+    data = [
+        ":node_modules/builtin-modules",
+        ":node_modules/esbuild",
+    ],
+    entry_point = "esbuild.config.mjs",
+)
+
+# `npm run build` — main.js bundle + the complete dist/ a real install copies
+# into the vault (see CLAUDE.md). HANZI_GEN_DIR points the generator's scratch
+# bundle at a writable dir (the linked node_modules tree is read-only here).
+js_run_binary(
+    name = "build",
+    srcs = glob([
+        "src/**/*.ts",
+        "scripts/**/*.ts",
+    ]) + [
+        "cedict_1_0_ts_utf-8_mdbg_20240705_025126.txt",
+        "manifest.json",
+        "package.json",
+        "tsconfig.json",
+        ":node_modules/@opentelemetry/api",
+        ":node_modules/hanzi-writer-data",
+        ":node_modules/obsidian-bug-collector",
+        ":node_modules/standard-obsidian-lib",
+        ":node_modules/standard-ts-lib",
+        ":node_modules/tslib",
+        ":node_modules/zod",
+    ],
+    args = ["production"],
+    chdir = package_name(),
+    env = {"HANZI_GEN_DIR": ".hanzi-gen-scratch"},
+    out_dirs = ["dist"],
+    tool = ":esbuild_config",
+    visibility = ["//visibility:public"],
+)
+
+# `npm run test:unit` — jest with the @swc/jest transform under jsdom.
+jest_test(
+    name = "test",
+    size = "large",
+    config = "jest.config.js",
+    data = glob(
+        [
+            "src/**/*.ts",
+            "tests/**",
+            "examples/**",
+        ],
+        exclude = [
+            "tests/e2e_runner.js",
+            "tests/component_runner.js",
+            "tests/component_harness.js",
+        ],
+    ) + [
+        "package.json",
+        "tsconfig.json",
+        ":node_modules",
+    ],
+    node_modules = ":node_modules",
+)
+
+# `npm run test:ts` — tsc --noEmit over src/, tests/ and scripts/.
+typescript_bin.tsc_test(
+    name = "type_check",
+    args = [
+        "--noEmit",
+        "-p",
+        "tsconfig.json",
+    ],
+    chdir = package_name(),
+    data = glob([
+        "src/**/*.ts",
+        "tests/**/*.ts",
+        "scripts/**/*.ts",
+    ]) + [
+        "package.json",
+        "tsconfig.json",
+        ":node_modules",
+    ],
+)
+
+# `npm run lint` — eslint with the gts flat config (type-aware, keyed off
+# ./tsconfig.json).
+eslint_bin.eslint_test(
+    name = "lint",
+    args = ["."],
+    chdir = package_name(),
+    data = glob([
+        "src/**/*.ts",
+        "tests/**/*.ts",
+        "tests/**/*.mjs",
+        "scripts/**/*.ts",
+    ]) + [
+        ".prettierrc.js",
+        "eslint.config.js",
+        "package.json",
+        "tsconfig.json",
+        ":node_modules",
+    ],
+)
+
+# `npm run build:e2e` — the three test bundles. Uses the Bazel esbuild
+# toolchain (the npm esbuild package's CLI shim is a native binary after
+# install, so it cannot be driven through node). Outputs are named *_bundle.js
+# so they never collide with the committed tests/*.js bundles.
+E2E_BUNDLE_SRCS = glob([
+    "src/**/*.ts",
+    "tests/**/*.ts",
+]) + [
+    "package.json",
+    "tsconfig.json",
+    ":node_modules",
+]
+
+# Optional requires inside ws/debug — absent at runtime, same as the npm
+# build (they only resolve on the host through pnpm's hidden hoist).
+E2E_BUNDLE_EXTERNAL = [
+    "bufferutil",
+    "supports-color",
+    "utf-8-validate",
+]
+
+esbuild(
+    name = "e2e_runner",
+    srcs = E2E_BUNDLE_SRCS,
+    entry_point = "tests/e2e_runner.ts",
+    external = E2E_BUNDLE_EXTERNAL,
+    output = "tests/e2e_runner_bundle.js",
+    platform = "node",
+    target = "node18",
+)
+
+esbuild(
+    name = "component_runner",
+    srcs = E2E_BUNDLE_SRCS,
+    entry_point = "tests/component_runner.ts",
+    external = E2E_BUNDLE_EXTERNAL,
+    output = "tests/component_runner_bundle.js",
+    platform = "node",
+    target = "node18",
+)
+
+# The in-page harness: iife, with `obsidian` aliased to the browser stub via
+# the config file (the rule has no alias attribute; the npm script uses
+# --alias). The repo tsconfig is passed so the file:-dep decorators are
+# transformed the same way.
+esbuild(
+    name = "component_harness",
+    srcs = E2E_BUNDLE_SRCS,
+    config = "tests/component_harness.esbuild.mjs",
+    entry_point = "tests/component_harness.ts",
+    format = "iife",
+    output = "tests/component_harness_bundle.js",
+    tsconfig = "tsconfig.json",
+)
+
+# Host-coupled scripts: run from the real source tree via `bazel run`.
+sh_binary(
+    name = "e2e_docker",
+    srcs = ["//:run_in_package.sh"],
+    args = [
+        package_name(),
+        "bash",
+        "docker/build-and-run.sh",
+    ],
+    tags = ["manual"],
+)
+
+sh_binary(
+    name = "e2e_docker_mobile",
+    srcs = ["//:run_in_package.sh"],
+    args = [
+        package_name(),
+        "env",
+        "E2E_EMULATE_MOBILE=1",
+        "bash",
+        "docker/build-and-run.sh",
+    ],
+    tags = ["manual"],
+)
+
+sh_binary(
+    name = "e2e_docker_goldens",
+    srcs = ["//:run_in_package.sh"],
+    args = [
+        package_name(),
+        "env",
+        "E2E_REGEN_GOLDENS=1",
+        "bash",
+        "docker/build-and-run.sh",
+        "node",
+        "tests/e2e_runner.js",
+    ],
+    tags = ["manual"],
+)
+
+sh_binary(
+    name = "component_docker",
+    srcs = ["//:run_in_package.sh"],
+    args = [
+        package_name(),
+        "bash",
+        "docker/build-and-run.sh",
+        "node",
+        "tests/component_runner.js",
+    ],
+    tags = ["manual"],
+)
+
+sh_binary(
+    name = "component_docker_goldens",
+    srcs = ["//:run_in_package.sh"],
+    args = [
+        package_name(),
+        "env",
+        "E2E_REGEN_GOLDENS=1",
+        "bash",
+        "docker/build-and-run.sh",
+        "node",
+        "tests/component_runner.js",
+    ],
+    tags = ["manual"],
+)
+
+# `npm run dev` — esbuild watch mode writing main.js into the source tree
+# (requires a local `pnpm install`).
+sh_binary(
+    name = "dev",
+    srcs = ["//:run_in_package.sh"],
+    args = [
+        package_name(),
+        "node",
+        "esbuild.config.mjs",
+    ],
+    tags = ["manual"],
+)

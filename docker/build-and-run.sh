@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 # Build the E2E image and run it headlessly. Stages a temp build context that
-# contains the three repos as siblings (the plugin uses `file:../standard-*`
-# deps that live outside this repo, so the context must reach them), excluding
-# heavy/generated dirs. Artifacts (dumps/, e2e-run.log, and regenerated goldens)
-# are written back to docker-artifacts/ on the host.
+# mirrors the monorepo layout (the plugin uses `file:../../common/standard-*`
+# and `file:../obsidian-bug-collector` deps that live outside this repo, so the
+# context must reach them), excluding heavy/generated dirs. Artifacts (dumps/,
+# e2e-run.log, and regenerated goldens) are written back to docker-artifacts/
+# on the host.
 #
 # Usage:
 #   docker/build-and-run.sh                    # build + run the E2E
@@ -12,13 +13,16 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PARENT_DIR="$(dirname "$REPO_DIR")"
+# The monorepo root (contains obsidian/ and common/) — the staged build
+# context mirrors this layout so the file: deps resolve.
+MONO_DIR="$(dirname "$PARENT_DIR")"
 IMAGE="${HANZI_E2E_IMAGE:-hanzi-e2e}"
 OUT_DIR="$REPO_DIR/docker-artifacts"
 # Container-specific goldens live here (committed), separate from the host's
 # tests/__goldens__. Bind-mounted over the container's golden dir so Docker runs
 # compare against — and `:goldens` regenerates into — this directory directly.
 GOLDEN_DIR="$REPO_DIR/docker/__golden__"
-CONTAINER_GOLDEN_DIR="/workspace/obsidian-hanzi-practice/tests/__goldens__"
+CONTAINER_GOLDEN_DIR="/workspace/obsidian/obsidian-hanzi-practice/tests/__goldens__"
 
 # The AppImage is not committed (100MB GitHub limit) — fetch it if missing so
 # the staged context contains it for the Dockerfile's extract step.
@@ -40,11 +44,14 @@ trap cleanup EXIT
 
 echo ">> Staging build context in $CTX"
 stage_pkg() {
+  # $1 is the repo path relative to the monorepo root (e.g.
+  # obsidian/obsidian-hanzi-practice, common/standard-ts-lib); the staged
+  # context keeps that layout so the file: deps resolve unchanged.
   local pkg="$1"
-  [ -d "$PARENT_DIR/$pkg" ] || { echo "!! missing sibling repo: $PARENT_DIR/$pkg" >&2; exit 1; }
+  [ -d "$MONO_DIR/$pkg" ] || { echo "!! missing sibling repo: $MONO_DIR/$pkg" >&2; exit 1; }
   mkdir -p "$CTX/$pkg"
   # tar-pipe with excludes: portable and doesn't copy the excluded trees at all.
-  tar -C "$PARENT_DIR/$pkg" \
+  tar -C "$MONO_DIR/$pkg" \
       --exclude='./node_modules' \
       --exclude='./.git' \
       --exclude='./squashfs-root' \
@@ -58,10 +65,10 @@ stage_pkg() {
       --exclude='./dumps-component' \
       -cf - . | tar -C "$CTX/$pkg" -xf -
 }
-stage_pkg obsidian-hanzi-practice
-stage_pkg standard-obsidian-lib
-stage_pkg standard-ts-lib
-stage_pkg obsidian-bug-collector
+stage_pkg obsidian/obsidian-hanzi-practice
+stage_pkg common/standard-obsidian-lib
+stage_pkg common/standard-ts-lib
+stage_pkg obsidian/obsidian-bug-collector
 
 echo ">> Building image: $IMAGE"
 docker build -t "$IMAGE" -f "$REPO_DIR/docker/Dockerfile" "$CTX"
@@ -83,7 +90,7 @@ if [[ "$*" != *component_runner* ]]; then
   echo ">> Wiping $VAULT_DIR (vault will be inspectable there after the run)"
   rm -rf "$VAULT_DIR"
   mkdir -p "$VAULT_DIR"
-  VAULT_MOUNT=(-v "$VAULT_DIR:/workspace/obsidian-hanzi-practice/test_vault")
+  VAULT_MOUNT=(-v "$VAULT_DIR:/workspace/obsidian/obsidian-hanzi-practice/test_vault")
 fi
 
 docker run --rm \
